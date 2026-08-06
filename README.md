@@ -1,18 +1,17 @@
 # LLM Model Manager (CLI)
 
-A Dart console application to **manage a catalog of LLM models** and **ping-test them against an OpenAI-compatible API**, built to demonstrate **Riverpod dependency injection**, **data models**, and **service/controller architecture** in pure Dart (no Flutter).
+A Dart console application to **catalog, list, and compare LLM models** — provider, context window, max output, token pricing, capabilities, and status — built to demonstrate **Riverpod dependency injection**, **data models**, and **service/controller architecture** in pure Dart (no Flutter).
 
 ## Features
 
-- Interactive menu-driven console UI
+- Interactive menu-driven console UI with every choice listed up front
 - Create, list, filter, search, edit, and delete model catalog entries
 - Record provider, context window, max output, token pricing, capabilities, and status per model
 - Side-by-side model comparison with cost estimates
-- Ping-test any model through an OpenAI-compatible endpoint (latency measured)
-- Session test history (successes & failures)
-- Dashboard with per-provider counts, average context size, and test statistics
-- Configurable via environment variables — no hardcoded secrets
-- 28 passing unit tests (LLM client tested with a mocked HTTP client)
+- Model detail views with full specifications
+- Dashboard with per-provider counts, average context size, cheapest model, and widest context
+- Every prompt with predefined choices (provider, status, capability) shows the available options
+- 17 passing unit tests
 
 ## Architecture
 
@@ -24,15 +23,11 @@ lib/
 │   ├── llm_model.dart       Catalog entity (immutable, cost math)
 │   ├── llm_provider.dart    Provider enum (OpenAI, Anthropic, Google, ...)
 │   ├── model_status.dart    Status enum (Available, Preview, ...)
-│   ├── model_capability.dart Capability enum (Vision, Reasoning, ...)
-│   └── model_test_result.dart Outcome of one ping test
+│   └── model_capability.dart Capability enum (Vision, Reasoning, ...)
 ├── services/
-│   ├── model_service.dart       Catalog (business logic + storage)
-│   ├── test_history_service.dart  Test-run history store
-│   └── llm_service.dart         OpenAI-compatible ping client + config
+│   └── model_service.dart       Catalog (business logic + storage)
 ├── controllers/
-│   ├── model_controller.dart  Riverpod Notifier exposing the catalog as state
-│   └── test_history_controller.dart Riverpod Notifier orchestrating pings
+│   └── model_controller.dart  Riverpod Notifier exposing the catalog as state
 └── providers/
     └── providers.dart       Riverpod providers — the dependency injection layer
 ```
@@ -41,32 +36,22 @@ lib/
 
 All dependencies are declared as providers in `lib/providers/providers.dart`:
 
-- `llmConfigProvider` — connection settings resolved from environment variables.
-- `llmServiceProvider` — the HTTP client used to ping models.
-- `modelServiceProvider` / `testHistoryServiceProvider` — the services holding business logic.
-- `modelControllerProvider` / `testHistoryControllerProvider` — `NotifierProvider`s whose controllers receive their dependencies via `ref.read`/`ref.watch`, never via manual construction.
+- `modelServiceProvider` — the service holding catalog business logic.
+- `modelControllerProvider` — a `NotifierProvider` whose controller receives its dependency via `ref.read`/`ref.watch`, never via manual construction.
 
-The UI layer (`ConsoleApp`) resolves everything through a `ProviderContainer`, so no class in the app constructs its own dependencies. Tests swap implementations via provider overrides — e.g. the LLM service is replaced with one backed by a `http.MockClient`, so tests never touch the network:
+The UI layer (`ConsoleApp`) resolves everything through a `ProviderContainer`, so no class in the app constructs its own dependencies. Tests read providers through the same container:
 
 ```dart
-final container = ProviderContainer(
-  overrides: [
-    llmServiceProvider.overrideWithValue(fakeService),
-  ],
-);
+final container = ProviderContainer();
+final controller = container.read(modelControllerProvider.notifier);
 ```
 
 ## Requirements & setup
 
 - Dart SDK 3.12+
-- An OpenAI-compatible API endpoint (optional — the catalog works without it)
 
 ```sh
 dart pub get
-
-# Optional configuration for ping-testing models:
-export OPENAI_API_KEY="sk-..."               # required to ping-test
-export OPENAI_BASE_URL="https://api.openai.com/v1"   # or any compatible endpoint
 ```
 
 ## Run
@@ -85,7 +70,7 @@ dart test
 
 | Key | Action |
 |-----|--------|
-| 1 | Add a model entry (id, display name, provider, context, costs, capabilities, status) |
+| 1 | Add a model entry (id, display name, provider, context, costs, capabilities, status, description) |
 | 2 | List all models |
 | 3 | Filter by provider / status / capability |
 | 4 | Search models |
@@ -93,9 +78,7 @@ dart test
 | 6 | Edit a model |
 | 7 | Delete a model |
 | 8 | Compare two models side by side |
-| 9 | Test a model — send a ping and measure latency |
-| 10 | Test history |
-| 11 | Dashboard |
+| 9 | Dashboard |
 | 0 | Exit |
 
 Example entries:

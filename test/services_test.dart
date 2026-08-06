@@ -1,9 +1,7 @@
 import 'package:llm_model_manager_cli/models/llm_provider.dart';
 import 'package:llm_model_manager_cli/models/model_capability.dart';
 import 'package:llm_model_manager_cli/models/model_status.dart';
-import 'package:llm_model_manager_cli/models/model_test_result.dart';
 import 'package:llm_model_manager_cli/services/model_service.dart';
-import 'package:llm_model_manager_cli/services/test_history_service.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -140,31 +138,6 @@ void main() {
       expect(stats['openai'], 2);
       expect(stats['status_available'], 1);
       expect(stats['status_preview'], 1);
-    });
-  });
-
-  group('TestHistoryService', () {
-    test('stores results and computes statistics', () {
-      final history = TestHistoryService();
-      ModelTestResult result({required String id, required bool success, required int latency}) =>
-          ModelTestResult(
-            id: id,
-            modelId: 'm',
-            modelName: 'm',
-            provider: LlmProvider.openai,
-            latencyMs: latency,
-            testedAt: DateTime(2024),
-            error: success ? null : 'boom',
-          );
-
-      history.add(result(id: 'a', success: true, latency: 100));
-      history.add(result(id: 'b', success: false, latency: 200));
-
-      expect(history.length, 2);
-      expect(history.getAll().map((r) => r.id), ['b', 'a']);
-      expect(history.successCount, 1);
-      expect(history.failureCount, 1);
-      expect(history.averageLatencyMs, 150);
     });
   });
 }

@@ -7,14 +7,13 @@ import 'models/llm_model.dart';
 import 'models/llm_provider.dart';
 import 'models/model_capability.dart';
 import 'models/model_status.dart';
-import 'models/model_test_result.dart';
 import 'providers/providers.dart';
 import 'services/model_service.dart';
 
 /// Interactive console front-end for the LLM Model Manager.
 ///
 /// The UI layer only talks to Riverpod (via a [ProviderContainer]); it never
-/// creates services, controllers, or HTTP clients directly.
+/// creates services or controllers directly.
 class ConsoleApp {
   ConsoleApp({ProviderContainer? container})
       : _container = container ?? ProviderContainer();
@@ -44,10 +43,6 @@ class ConsoleApp {
         case '8':
           _compareModels();
         case '9':
-          await _testModel();
-        case '10':
-          _showHistory();
-        case '11':
           _dashboard();
         case '0':
           running = false;
@@ -75,8 +70,7 @@ class ConsoleApp {
         _readDouble('Input cost per 1M tokens (USD, e.g. 2.50): ', minValue: 0);
     final outputCost =
         _readDouble('Output cost per 1M tokens (USD): ', minValue: 0);
-    final capabilities =
-        _readCapabilities(_readLine('Capabilities (comma-separated, optional): '));
+    final capabilities = _readCapabilities('Capabilities (comma-separated, optional): ');
     final status = _readStatus('Status [Available]: ',
         defaultTo: ModelStatus.available);
     _info('Description (finish with a line containing only "."):');
@@ -192,8 +186,7 @@ FILTER BY
           _apply(() => _modelController
               .update(model.id, (m) => m.changeCosts(input: input, output: output)));
         case '7':
-          final caps =
-              _readCapabilities(_readLine('New capabilities (comma-separated): '));
+          final caps = _readCapabilities('New capabilities (comma-separated): ');
           _apply(() => _modelController
               .update(model.id, (m) => m.changeCapabilities(caps)));
         case '8':
@@ -255,52 +248,10 @@ FILTER BY
     print(cell('status', a.status.label, b.status.label));
   }
 
-  // ---------------------------------------------------------------- testing
-
-  Future<void> _testModel() async {
-    final model = _selectModel(prompt: 'model to test');
-    if (model == null) return;
-
-    _info('Pinging "${model.name}" via ${_container.read(llmConfigProvider).baseUrl} ...');
-    final result =
-        await _container.read(testHistoryControllerProvider.notifier).pingModel(model);
-
-    if (result.success) {
-      _success('Reachable — ${result.latencyMs}ms');
-    } else {
-      _error('Failed after ${result.latencyMs}ms: ${result.error}');
-    }
-    _success('Test recorded in history.');
-  }
-
-  void _showHistory() {
-    final results = _testHistoryState;
-    if (results.isEmpty) return _info('No tests run yet. Use menu option 9.');
-
-    _success('${results.length} test(s):');
-    for (var i = 0; i < results.length; i++) {
-      final r = results[i];
-      final icon = r.success ? '\x1B[32m[ok]\x1B[0m' : '\x1B[31m[!]\x1B[0m';
-      print('  ${i + 1}. $icon ${r.modelName} (${r.provider.label}) - ${r.latencyMs}ms');
-    }
-
-    final raw = _readLine('View details (number, 0 to go back): ').trim();
-    final index = int.tryParse(raw);
-    if (index == null || index < 1 || index > results.length) return;
-    final r = results[index - 1];
-    if (r.success) {
-      _success('${r.modelName} was reachable in ${r.latencyMs}ms (${r.testedAt}).');
-    } else {
-      _error('${r.modelName} failed in ${r.latencyMs}ms (${r.testedAt}):');
-      print(r.error);
-    }
-  }
-
-  // ---------------------------------------------------------------- dashboard
+  // --------------------------------------------------------------- dashboard
 
   void _dashboard() {
     final models = _modelState;
-    final tests = _testHistoryState;
     final avgCtx = models.isEmpty
         ? 0
         : models.fold<int>(0, (s, m) => s + m.contextWindow) ~/ models.length;
@@ -314,12 +265,20 @@ FILTER BY
       if (count > 0) _center('  ${provider.label}: $count', width);
     }
     _center('average context: ${_fmtInt(avgCtx)} tokens', width);
-    _center('tests: ${tests.length}', width);
-    _center('  ok: ${tests.where((r) => r.success).length}', width);
-    _center('  failed: ${tests.where((r) => !r.success).length}', width);
-    _center('  average latency: ${_avgLatency(tests)}ms', width);
     _divider(width);
-    _success('Tip: set OPENAI_API_KEY to ping-test your OpenAI-compatible models.');
+
+    if (models.isEmpty) {
+      _info('Nothing to show yet. Add a model from the main menu.');
+      return;
+    }
+
+    final cheapest = _service.sortedByCost().first;
+    final widest =
+        models.reduce((a, b) => a.contextWindow > b.contextWindow ? a : b);
+    _info('Cheapest to run 10k tokens: ${cheapest.label} '
+        '(\$${cheapest.costForTokens(10000).toStringAsFixed(3)})');
+    _info('Widest context window: ${widest.label} '
+        '(${_fmtInt(widest.contextWindow)} tokens)');
   }
 
   // ------------------------------------------------------------------ helpers
@@ -329,15 +288,7 @@ FILTER BY
 
   List<LlmModel> get _modelState => _container.read(modelControllerProvider);
 
-  List<ModelTestResult> get _testHistoryState =>
-      _container.read(testHistoryControllerProvider);
-
   ModelService get _service => _container.read(modelServiceProvider);
-
-  int _avgLatency(List<ModelTestResult> results) {
-    if (results.isEmpty) return 0;
-    return results.fold<int>(0, (s, r) => s + r.latencyMs) ~/ results.length;
-  }
 
   void _apply(bool Function() action) {
     action() ? _success('Updated.') : _error('Update failed.');
@@ -396,6 +347,7 @@ FILTER BY
 
   LlmProvider _readProvider(String prompt, {LlmProvider? defaultTo}) {
     while (true) {
+      _options('Provider', LlmProvider.values.map((p) => p.label));
       final raw = _readLine(prompt).trim();
       if (raw.isEmpty && defaultTo != null) return defaultTo;
       try {
@@ -408,6 +360,7 @@ FILTER BY
 
   ModelStatus _readStatus(String prompt, {ModelStatus? defaultTo}) {
     while (true) {
+      _options('Status', ModelStatus.values.map((s) => s.label));
       final raw = _readLine(prompt).trim();
       if (raw.isEmpty && defaultTo != null) return defaultTo;
       try {
@@ -420,6 +373,7 @@ FILTER BY
 
   ModelCapability _readCapability(String prompt) {
     while (true) {
+      _options('Capabilities', ModelCapability.values.map((c) => c.label));
       try {
         return ModelCapability.fromInput(_readLine(prompt));
       } on FormatException catch (e) {
@@ -428,13 +382,13 @@ FILTER BY
     }
   }
 
-  Set<ModelCapability> _readCapabilities(String raw) {
+  Set<ModelCapability> _readCapabilities(String prompt) {
     while (true) {
+      _options('Capabilities', ModelCapability.values.map((c) => c.label));
       try {
-        return ModelCapability.parseSet(raw);
+        return ModelCapability.parseSet(_readLine(prompt));
       } on FormatException catch (e) {
         _error(e.message);
-        raw = _readLine('Capabilities: ');
       }
     }
   }
@@ -477,17 +431,11 @@ FILTER BY
   // ------------------------------------------------------------------ output
 
   void _printBanner() {
-    final config = _container.read(llmConfigProvider);
     _divider(46);
     _center('LLM MODEL MANAGER', 46);
     _center('Dart + Riverpod (DI) demo', 46);
     _center('Models / Services / Controllers', 46);
     _divider(46);
-    print('  api : ${config.apiKey.isEmpty ? 'NOT SET' : 'set'}'
-        '  |  endpoint: ${config.baseUrl}');
-    if (config.apiKey.isEmpty) {
-      print('  SET OPENAI_API_KEY to ping-test OpenAI-compatible models.');
-    }
   }
 
   void _printMenu() {
@@ -501,9 +449,7 @@ MAIN MENU
   6. Edit model
   7. Delete model
   8. Compare models
-  9. Test a model (ping)
- 10. Test history
- 11. Dashboard
+  9. Dashboard
   0. Exit''');
   }
 
@@ -517,6 +463,10 @@ MAIN MENU
   String _readLine(String prompt) {
     stdout.write(prompt);
     return stdin.readLineSync() ?? '';
+  }
+
+  void _options(String header, Iterable<String> options) {
+    print('  $header options: ${options.join(', ')}');
   }
 
   void _info(String message) => print('\x1B[36m$message\x1B[0m');

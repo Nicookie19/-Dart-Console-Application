@@ -2,7 +2,6 @@ import 'package:llm_model_manager_cli/models/llm_model.dart';
 import 'package:llm_model_manager_cli/models/llm_provider.dart';
 import 'package:llm_model_manager_cli/models/model_capability.dart';
 import 'package:llm_model_manager_cli/models/model_status.dart';
-import 'package:llm_model_manager_cli/models/model_test_result.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -76,30 +75,6 @@ void main() {
       expect(() => ModelStatus.fromInput('zzz'), throwsA(isA<FormatException>()));
       expect(() => ModelCapability.fromInput('x'),
           throwsA(isA<FormatException>()));
-    });
-  });
-
-  group('ModelTestResult', () {
-    test('success is true only when there is no error', () {
-      final ok = ModelTestResult(
-        id: '1',
-        modelId: 'm',
-        modelName: 'm',
-        provider: LlmProvider.local,
-        latencyMs: 10,
-        testedAt: DateTime(2024),
-      );
-      final fail = ModelTestResult(
-        id: '2',
-        modelId: 'm',
-        modelName: 'm',
-        provider: LlmProvider.local,
-        latencyMs: 5,
-        testedAt: DateTime(2024),
-        error: 'boom',
-      );
-      expect(ok.success, isTrue);
-      expect(fail.success, isFalse);
     });
   });
 }
