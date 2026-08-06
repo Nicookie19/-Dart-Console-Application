@@ -1,0 +1,17 @@
+name: task_manager_cli
+description: >-
+  A Dart console task manager demonstrating Riverpod dependency injection,
+  data models, and service/controller architecture.
+version: 1.0.0
+repository: https://github.com/Nicookie19/task-manager-cli
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  riverpod: ^3.4.2
+  uuid: ^4.6.0
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.31.2
