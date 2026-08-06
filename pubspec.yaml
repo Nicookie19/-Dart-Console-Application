@@ -9,6 +9,7 @@ environment:
   sdk: ^3.12.2
 
 dependencies:
+  http: ^1.6.0
   riverpod: ^3.4.2
   uuid: ^4.6.0
 

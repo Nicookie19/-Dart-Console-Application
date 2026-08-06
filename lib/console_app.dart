@@ -2,242 +2,381 @@ import 'dart:io';
 
 import 'package:riverpod/riverpod.dart';
 
-import 'controllers/task_controller.dart';
-import 'models/task.dart';
-import 'models/task_priority.dart';
-import 'models/task_status.dart';
+import 'controllers/prompt_controller.dart';
+import 'models/prompt.dart';
+import 'models/prompt_category.dart';
+import 'models/prompt_test_result.dart';
 import 'providers/providers.dart';
 
-/// Interactive console front-end.
+/// Interactive console front-end for the LLM Prompt Manager & Tester.
 ///
 /// The UI layer only talks to Riverpod (via a [ProviderContainer]); it never
-/// creates services or models directly.
+/// creates services, controllers, or HTTP clients directly.
 class ConsoleApp {
-  ConsoleApp({
-    ProviderContainer? container,
-    String Function(String prompt)? readLineOverride,
-  })  : _container = container ?? ProviderContainer(),
-        _readLine = readLineOverride ?? _readLineFromStdin;
+  ConsoleApp({ProviderContainer? container})
+      : _container = container ?? ProviderContainer();
 
   final ProviderContainer _container;
-  final String Function(String prompt) _readLine;
 
-  void run() {
+  Future<void> run() async {
     _printBanner();
     var running = true;
     while (running) {
       _printMenu();
-      final choice = _readLine('> ').trim();
-      switch (choice) {
+      switch (_readLine('> ').trim()) {
         case '1':
-          _addTask();
+          _addPrompt();
         case '2':
-          _listAll();
+          _listPrompts(_promptState);
         case '3':
-          _filterByStatus();
+          _filterByCategory();
         case '4':
-          _filterByPriority();
-        case '5':
           _search();
+        case '5':
+          _viewDetails();
         case '6':
-          _changeStatus(TaskStatus.inProgress);
+          _editPrompt();
         case '7':
-          _changeStatus(TaskStatus.done);
+          _deletePrompt();
         case '8':
-          _changeStatus(TaskStatus.todo);
+          await _testPrompt();
         case '9':
-          _changePriority();
+          _showHistory();
         case '10':
-          _deleteTask();
-        case '11':
           _dashboard();
         case '0':
           running = false;
         default:
-          _error("Unknown option '$choice'. Enter a number from the menu.");
+          _error('Unknown option. Enter a number from the menu.');
       }
     }
     _success('Goodbye!');
     _container.dispose();
   }
 
-  // ---------------------------------------------------------------- actions
+  // ------------------------------------------------------------- prompt menu
 
-  void _addTask() {
-    final title = _readLine('Title: ').trim();
-    if (title.isEmpty) return _error('Title cannot be empty.');
+  void _addPrompt() {
+    final name = _readLine('Name: ').trim();
+    if (name.isEmpty) return _error('Name cannot be empty.');
+    final category =
+        _readCategory('Category [General]: ', defaultTo: PromptCategory.general);
     final description = _readLine('Description (optional): ').trim();
-    final priority = _readPriority(_readLine('Priority [Medium]: '));
+    _info('Enter the prompt template. You may use {{variables}}:');
+    final content = _readMultiline('Content (finish with a line containing only "."): ');
 
-    final task = _controller.addTask(
-      title: title,
-      description: description,
-      priority: priority,
-    );
-    _success('Task created: ${task.title} (${task.priority})');
+    try {
+      final prompt = _promptController.addPrompt(
+        name: name,
+        content: content,
+        category: category,
+        description: description,
+      );
+      _success('Prompt "${prompt.name}" created.');
+      if (prompt.variables.isNotEmpty) {
+        _info('Detected variables: ${prompt.variables.join(', ')}');
+      }
+    } on ArgumentError catch (e) {
+      _error(e.message ?? 'Invalid prompt.');
+    }
   }
 
-  void _listAll() {
-    final tasks = _state;
-    if (tasks.isEmpty) return _info('No tasks yet. Add one from the menu.');
-    _info('${tasks.length} task(s):');
-    _printTasks(tasks);
+  void _listPrompts(List<Prompt> prompts) {
+    if (prompts.isEmpty) return _info('No prompts yet. Add one from the menu.');
+    _success('${prompts.length} prompt(s):');
+    _printPrompts(prompts);
   }
 
-  void _filterByStatus() {
-    final status = _readStatus(_readLine('Status (${TaskStatus.values.map((s) => s.label).join(' / ')}): '));
-    _printTasks(_container.read(taskServiceProvider).byStatus(status));
-  }
-
-  void _filterByPriority() {
-    final priority = _readPriority(_readLine('Priority: '));
-    _printTasks(_container.read(taskServiceProvider).byPriority(priority));
+  void _filterByCategory() {
+    final category = _readCategory(_readLine('Category: '));
+    final list = _container.read(promptServiceProvider).byCategory(category);
+    if (list.isEmpty) return _info('No prompts in the ${category.label} category.');
+    _success('${list.length} prompt(s) in ${category.label}:');
+    _printPrompts(list);
   }
 
   void _search() {
     final query = _readLine('Search: ').trim();
-    final results = _container.read(taskServiceProvider).search(query);
-    _info('${results.length} match(es) for "$query":');
-    _printTasks(results);
+    final results = _container.read(promptServiceProvider).search(query);
+    if (results.isEmpty) return _info('No prompts match "$query".');
+    _listPrompts(results);
   }
 
-  void _changeStatus(TaskStatus newStatus) {
-    final task = _selectTask();
-    if (task == null) return;
-
-    final ok = switch (newStatus) {
-      TaskStatus.inProgress => _controller.markInProgress(task.id),
-      TaskStatus.done => _controller.markDone(task.id),
-      TaskStatus.todo => _controller.reopen(task.id),
-    };
-    ok ? _success('"${task.title}" is now ${newStatus.label}.') : _error('Update failed.');
+  void _viewDetails() {
+    final prompt = _selectPrompt();
+    if (prompt == null) return;
+    _showPrompt(prompt);
   }
 
-  void _changePriority() {
-    final task = _selectTask();
-    if (task == null) return;
+  void _editPrompt() {
+    final prompt = _selectPrompt();
+    if (prompt == null) return;
 
-    final priority = _readPriority(_readLine('New priority: '));
-    _controller.reprioritize(task.id, priority)
-        ? _success('"${task.title}" priority is now ${priority.label}.')
-        : _error('Update failed.');
+    var editing = true;
+    while (editing) {
+      print('\nEDIT "${prompt.name}"');
+      print('  1. Rename');
+      print('  2. Edit content');
+      print('  3. Edit description');
+      print('  4. Change category');
+      print('  0. Back');
+      switch (_readLine('> ').trim()) {
+        case '1':
+          final name = _readLine('New name: ').trim();
+          _promptController.rename(prompt.id, name)
+              ? _success('Renamed to "$name".')
+              : _error('Rename failed.');
+        case '2':
+          _info('Enter new content (current variables will be replaced):');
+          final content = _readMultiline('Content (".", empty, to cancel): ');
+          if (content.isNotEmpty) {
+            _promptController.updateContent(prompt.id, content)
+                ? _success('Content updated.')
+                : _error('Update failed.');
+          }
+        case '3':
+          final description = _readLine('New description: ').trim();
+          _promptController.updateDescription(prompt.id, description)
+              ? _success('Description updated.')
+              : _error('Update failed.');
+        case '4':
+          final category = _readCategory(_readLine('New category: '));
+          _promptController.changeCategory(prompt.id, category)
+              ? _success('Category updated.')
+              : _error('Update failed.');
+        case '0':
+          editing = false;
+        default:
+          _error('Unknown option.');
+      }
+    }
   }
 
-  void _deleteTask() {
-    final task = _selectTask();
-    if (task == null) return;
+  void _deletePrompt() {
+    final prompt = _selectPrompt();
+    if (prompt == null) return;
 
-    final confirm = _readLine('Delete "${task.title}"? (y/N): ').trim().toLowerCase();
+    final confirm =
+        _readLine('Delete "${prompt.name}"? (y/N): ').trim().toLowerCase();
     if (confirm != 'y' && confirm != 'yes') return _info('Deletion cancelled.');
 
-    _controller.delete(task.id)
-        ? _success('"${task.title}" deleted.')
+    _promptController.delete(prompt.id)
+        ? _success('"${prompt.name}" deleted.')
         : _error('Delete failed.');
   }
 
+  // ---------------------------------------------------------------- testing
+
+  Future<void> _testPrompt() async {
+    final prompt = _selectPrompt();
+    if (prompt == null) return;
+
+    final variables = <String, String>{};
+    if (prompt.variables.isNotEmpty) {
+      _info('This prompt uses variables: ${prompt.variables.join(', ')}');
+      for (final variable in prompt.variables) {
+        variables[variable] = _readLine('  $variable: ').trim();
+      }
+    }
+
+    final defaultModel = _container.read(llmConfigProvider).defaultModel;
+    final modelInput = _readLine('Model [$defaultModel]: ').trim();
+    final model = modelInput.isEmpty ? defaultModel : modelInput;
+
+    _info('Sending to $model ... (this may take a few seconds)');
+    final result = await _container
+        .read(historyControllerProvider.notifier)
+        .runTest(prompt, variables, model: model);
+
+    _printTestResult(result);
+    _success(result.success
+        ? 'Test recorded in history.'
+        : 'Failure recorded in history.');
+  }
+
+  void _showHistory() {
+    final results = _historyState;
+    if (results.isEmpty) return _info('No tests run yet. Use menu option 8.');
+
+    _success('${results.length} test(s):');
+    for (var i = 0; i < results.length; i++) {
+      final r = results[i];
+      final icon = r.success ? '\x1B[32m[ok]\x1B[0m' : '\x1B[31m[!]\x1B[0m';
+      print('  ${i + 1}. $icon ${r.promptName} (${r.model}) - ${r.latencyMs}ms');
+    }
+
+    final raw = _readLine('View details (number, 0 to go back): ').trim();
+    final index = int.tryParse(raw);
+    if (index == null || index < 1 || index > results.length) return;
+    final r = results[index - 1];
+    print('\n=== ${r.success ? 'SUCCESS' : 'FAILURE'} | ${r.promptName} | '
+        '${r.model} | ${r.latencyMs}ms ===');
+    _info('Sent prompt:');
+    print(r.renderedPrompt);
+    if (r.success) {
+      _info('Response:');
+      print(r.response);
+    } else {
+      _error('Error:');
+      print(r.error);
+    }
+  }
+
+  // ---------------------------------------------------------------- dashboard
+
   void _dashboard() {
-    final stats = _container.read(taskServiceProvider).statistics();
+    final prompts = _promptState;
+    final history = _historyState;
+
     final width = 46;
     _divider(width);
     _center('DASHBOARD', width);
-    _center('total: ${stats['total']}', width);
-    for (final status in TaskStatus.values) {
-      _center('  ${status.label}: ${stats[status.name]}', width);
+    _center('prompts: ${prompts.length}', width);
+    for (final category in PromptCategory.values) {
+      final count = prompts.where((p) => p.category == category).length;
+      if (count > 0) _center('  ${category.label}: $count', width);
     }
-    _center('by priority:', width);
-    for (final priority in TaskPriority.values) {
-      _center('  ${priority.label}: ${stats['priority_${priority.name}']}', width);
-    }
+    _center('tests: ${history.length}', width);
+    _center('  succeeded: ${history.where((r) => r.success).length}', width);
+    _center('  failed: ${history.where((r) => !r.success).length}', width);
+    _center('  average latency: ${_avgLatency(history)}ms', width);
     _divider(width);
+    _success('Tip: set OPENAI_API_KEY and OPENAI_MODEL to run live tests.');
   }
 
   // ------------------------------------------------------------------ helpers
 
-  TaskController get _controller =>
-      _container.read(taskControllerProvider.notifier);
+  PromptController get _promptController =>
+      _container.read(promptControllerProvider.notifier);
 
-  List<Task> get _state => _container.read(taskControllerProvider);
+  List<Prompt> get _promptState => _container.read(promptControllerProvider);
 
-  /// Lets the user pick a task from the current list; returns null if aborted.
-  Task? _selectTask() {
-    final tasks = _state;
-    if (tasks.isEmpty) {
-      _info('No tasks to choose from.');
+  List<PromptTestResult> get _historyState =>
+      _container.read(historyControllerProvider);
+
+  int _avgLatency(List<PromptTestResult> results) {
+    if (results.isEmpty) return 0;
+    return results.fold<int>(0, (s, r) => s + r.latencyMs) ~/ results.length;
+  }
+
+  /// Lets the user pick a prompt from the list; returns null if aborted.
+  Prompt? _selectPrompt() {
+    final prompts = _promptState;
+    if (prompts.isEmpty) {
+      _info('No prompts yet. Add one first.');
       return null;
     }
-    _info('Choose a task:');
-    for (var i = 0; i < tasks.length; i++) {
-      print('  ${i + 1}. ${tasks[i]}');
+    _info('Choose a prompt:');
+    for (var i = 0; i < prompts.length; i++) {
+      final prompt = prompts[i];
+      final vars = prompt.variables.isEmpty
+          ? ''
+          : ' \x1B[33m({{${prompt.variables.join('}}, {{')}}})\x1B[0m';
+      print('  ${i + 1}. $prompt$vars');
     }
-    final raw = _readLine('Task number (or 0 to cancel): ').trim();
+    final raw = _readLine('Number (or 0 to cancel): ').trim();
     final index = int.tryParse(raw);
-    if (index == null || index < 0 || index > tasks.length) {
-      _error('Invalid task number.');
+    if (index == null || index < 0 || index > prompts.length) {
+      _error('Invalid number.');
       return null;
     }
-    if (index == 0) return null;
-    return tasks[index - 1];
+    return index == 0 ? null : prompts[index - 1];
   }
 
-  TaskStatus _readStatus(String raw) {
-    try {
-      return TaskStatus.fromInput(raw);
-    } on FormatException catch (e) {
-      _error(e.message);
-      return _readStatus(_readLine('Status: '));
+  void _printPrompts(List<Prompt> prompts) {
+    for (final prompt in prompts) {
+      final vars = prompt.variables.isEmpty
+          ? ''
+          : ' \x1B[33m{{${prompt.variables.join(', ')}}}\x1B[0m';
+      print('  ${prompt.category.label}: ${prompt.name}$vars'
+          '${prompt.description.isEmpty ? '' : ' - ${prompt.description}'}');
     }
   }
 
-  TaskPriority _readPriority(String raw) {
-    try {
-      return TaskPriority.fromInput(raw);
-    } on FormatException catch (e) {
-      _error(e.message);
-      return _readPriority(_readLine('Priority: '));
+  void _showPrompt(Prompt prompt) {
+    print('\n${prompt.category.label} prompt: "${prompt.name}"');
+    if (prompt.description.isNotEmpty) {
+      _info('Description: ${prompt.description}');
     }
+    if (prompt.variables.isNotEmpty) {
+      _info('Variables: ${prompt.variables.join(', ')}');
+    }
+    _info('Content:');
+    print(prompt.content);
+  }
+
+  void _printTestResult(PromptTestResult r) {
+    print('\n=== ${r.success ? 'SUCCESS' : 'FAILURE'} | ${r.promptName} | '
+        '${r.model} | ${r.latencyMs}ms ===');
+    if (r.success) {
+      _info('Response:');
+      print(r.response);
+    } else {
+      _error('Error:');
+      print(r.error);
+    }
+  }
+
+  PromptCategory _readCategory(String prompt, {PromptCategory? defaultTo}) {
+    while (true) {
+      final raw = _readLine(prompt).trim();
+      if (raw.isEmpty && defaultTo != null) return defaultTo;
+      if (raw.isEmpty) {
+        _error('Category cannot be empty.');
+        continue;
+      }
+      try {
+        return PromptCategory.fromInput(raw);
+      } on FormatException catch (e) {
+        _error(e.message);
+      }
+    }
+  }
+
+  /// Reads multiple lines of input terminated by an empty line or a line
+  /// containing only a dot.
+  String _readMultiline(String prompt) {
+    _info(prompt);
+    final buffer = StringBuffer();
+    while (true) {
+      final line = _readLine('> ');
+      if (line.trim() == '.' || line.trim().isEmpty) break;
+      buffer.writeln(line);
+    }
+    return buffer.toString().trimRight();
   }
 
   // ------------------------------------------------------------------ output
 
-  void _printTasks(List<Task> tasks) {
-    if (tasks.isEmpty) return _info('No tasks match.');
-    for (final task in tasks) {
-      print(_formatTask(task));
-    }
-  }
-
-  String _formatTask(Task task) {
-    final lines = <String>[
-      '  ${task.status == TaskStatus.done ? '[x]' : task.status == TaskStatus.inProgress ? '[-]' : '[ ]'} '
-          '${task.title}  (${task.priority.label}, ${task.status.label})'
-    ];
-    if (task.description.isNotEmpty) lines.add('      ${task.description}');
-    lines.add('      id: ${task.id}');
-    return lines.join('\n');
-  }
-
   void _printBanner() {
+    final config = _container.read(llmConfigProvider);
+    final keyStatus = config.apiKey.isEmpty ? 'NOT SET' : 'set';
     _divider(46);
-    _center('TASK MANAGER CLI', 46);
+    _center('LLM PROMPT MANAGER & TESTER', 46);
     _center('Dart + Riverpod (DI) demo', 46);
     _center('Models / Services / Controllers', 46);
     _divider(46);
+    print('  api key : $keyStatus');
+    print('  base url: ${config.baseUrl}');
+    print('  model   : ${config.defaultModel}');
+    if (config.apiKey.isEmpty) {
+      print('  SET OPENAI_API_KEY to run live tests.');
+    }
   }
 
   void _printMenu() {
     print('''
 MAIN MENU
-  1. Add task
-  2. List all tasks
-  3. Filter by status
-  4. Filter by priority
-  5. Search tasks
-  6. Mark task in progress
-  7. Mark task done
-  8. Reopen task
-  9. Change priority
- 10. Delete task
- 11. Dashboard
+  1. Add prompt
+  2. List all prompts
+  3. Filter by category
+  4. Search prompts
+  5. View prompt details
+  6. Edit prompt
+  7. Delete prompt
+  8. Test a prompt
+  9. Test history
+ 10. Dashboard
   0. Exit''');
   }
 
@@ -248,14 +387,14 @@ MAIN MENU
     print('${' ' * pad}$text');
   }
 
+  String _readLine(String prompt) {
+    stdout.write(prompt);
+    return stdin.readLineSync() ?? '';
+  }
+
   void _info(String message) => print('\x1B[36m$message\x1B[0m');
 
   void _success(String message) => print('\x1B[32m$message\x1B[0m');
 
   void _error(String message) => print('\x1B[31m$message\x1B[0m');
-
-  static String _readLineFromStdin(String prompt) {
-    stdout.write(prompt);
-    return stdin.readLineSync() ?? '';
-  }
 }

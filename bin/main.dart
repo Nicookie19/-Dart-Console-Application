@@ -1,5 +1,5 @@
 import 'package:task_manager_cli/console_app.dart';
 
-void main() {
-  ConsoleApp().run();
+Future<void> main() async {
+  await ConsoleApp().run();
 }
