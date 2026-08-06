@@ -1,4 +1,4 @@
-name: task_manager_cli
+name: llm_model_manager_cli
 description: >-
   A Dart console LLM model manager demonstrating Riverpod dependency
   injection, data models, and service/controller architecture.

@@ -1,14 +1,14 @@
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:riverpod/riverpod.dart';
-import 'package:task_manager_cli/controllers/model_controller.dart';
-import 'package:task_manager_cli/controllers/test_history_controller.dart';
-import 'package:task_manager_cli/models/llm_model.dart';
-import 'package:task_manager_cli/models/llm_provider.dart';
-import 'package:task_manager_cli/models/model_capability.dart';
-import 'package:task_manager_cli/models/model_status.dart';
-import 'package:task_manager_cli/providers/providers.dart';
-import 'package:task_manager_cli/services/llm_service.dart';
+import 'package:llm_model_manager_cli/controllers/model_controller.dart';
+import 'package:llm_model_manager_cli/controllers/test_history_controller.dart';
+import 'package:llm_model_manager_cli/models/llm_model.dart';
+import 'package:llm_model_manager_cli/models/llm_provider.dart';
+import 'package:llm_model_manager_cli/models/model_capability.dart';
+import 'package:llm_model_manager_cli/models/model_status.dart';
+import 'package:llm_model_manager_cli/providers/providers.dart';
+import 'package:llm_model_manager_cli/services/llm_service.dart';
 import 'package:test/test.dart';
 
 /// Builds a container with the LLM service pointed at a mock endpoint.

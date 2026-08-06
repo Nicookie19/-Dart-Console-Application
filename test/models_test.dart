@@ -1,8 +1,8 @@
-import 'package:task_manager_cli/models/llm_model.dart';
-import 'package:task_manager_cli/models/llm_provider.dart';
-import 'package:task_manager_cli/models/model_capability.dart';
-import 'package:task_manager_cli/models/model_status.dart';
-import 'package:task_manager_cli/models/model_test_result.dart';
+import 'package:llm_model_manager_cli/models/llm_model.dart';
+import 'package:llm_model_manager_cli/models/llm_provider.dart';
+import 'package:llm_model_manager_cli/models/model_capability.dart';
+import 'package:llm_model_manager_cli/models/model_status.dart';
+import 'package:llm_model_manager_cli/models/model_test_result.dart';
 import 'package:test/test.dart';
 
 void main() {

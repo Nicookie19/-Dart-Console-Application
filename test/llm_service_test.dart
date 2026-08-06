@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:task_manager_cli/services/llm_service.dart';
+import 'package:llm_model_manager_cli/services/llm_service.dart';
 import 'package:test/test.dart';
 
 void main() {
