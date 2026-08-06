@@ -1,99 +1,170 @@
-import 'package:task_manager_cli/models/prompt_category.dart';
-import 'package:task_manager_cli/models/prompt_test_result.dart';
-import 'package:task_manager_cli/services/prompt_service.dart';
+import 'package:task_manager_cli/models/llm_provider.dart';
+import 'package:task_manager_cli/models/model_capability.dart';
+import 'package:task_manager_cli/models/model_status.dart';
+import 'package:task_manager_cli/models/model_test_result.dart';
+import 'package:task_manager_cli/services/model_service.dart';
 import 'package:task_manager_cli/services/test_history_service.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('PromptService', () {
-    late PromptService service;
+  group('ModelService', () {
+    late ModelService service;
 
     setUp(() {
-      service = PromptService();
+      service = ModelService();
       addTearDown(service.clear);
     });
 
-    test('createPrompt validates input and assigns unique ids', () {
-      final a = service.createPrompt(name: '  A  ', content: 'Hi {{name}}');
-      final b = service.createPrompt(name: 'B', content: 'Yo');
+    test('createModel validates input and assigns unique ids', () {
+      final a = service.createModel(
+        name: '  gpt-4o  ',
+        provider: LlmProvider.openai,
+        contextWindow: 128000,
+        maxOutputTokens: 4096,
+        inputCostPerMillion: 2.5,
+        outputCostPerMillion: 10,
+        capabilities: {ModelCapability.code},
+      );
+      final b = service.createModel(
+        name: 'claude-3',
+        provider: LlmProvider.anthropic,
+        contextWindow: 200000,
+        maxOutputTokens: 8192,
+        inputCostPerMillion: 3,
+        outputCostPerMillion: 15,
+      );
 
-      expect(a.name, 'A');
+      expect(a.name, 'gpt-4o');
+      expect(a.capabilities, contains(ModelCapability.code));
       expect(a.id, isNot(b.id));
       expect(service.length, 2);
-      expect(() => service.createPrompt(name: '', content: 'x'),
-          throwsA(isA<ArgumentError>()));
-      expect(() => service.createPrompt(name: 'x', content: '  '),
-          throwsA(isA<ArgumentError>()));
+
+      expect(
+        () => service.createModel(
+            name: '', provider: LlmProvider.openai, contextWindow: 1,
+            maxOutputTokens: 1, inputCostPerMillion: 0, outputCostPerMillion: 0),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(
+        () => service.createModel(
+            name: 'x', provider: LlmProvider.openai, contextWindow: 0,
+            maxOutputTokens: 1, inputCostPerMillion: 0, outputCostPerMillion: 0),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(
+        () => service.createModel(
+            name: 'x', provider: LlmProvider.openai, contextWindow: 1,
+            maxOutputTokens: 1, inputCostPerMillion: -1, outputCostPerMillion: 0),
+        throwsA(isA<ArgumentError>()),
+      );
     });
 
     test('getAll returns newest first', () {
-      service.createPrompt(name: 'a', content: '1');
-      service.createPrompt(name: 'b', content: '2');
-      expect(service.getAll().map((p) => p.name), ['b', 'a']);
+      service.createModel(
+          name: 'a', provider: LlmProvider.openai, contextWindow: 1,
+          maxOutputTokens: 1, inputCostPerMillion: 0, outputCostPerMillion: 0);
+      service.createModel(
+          name: 'b', provider: LlmProvider.openai, contextWindow: 1,
+          maxOutputTokens: 1, inputCostPerMillion: 0, outputCostPerMillion: 0);
+      expect(service.getAll().map((m) => m.name), ['b', 'a']);
     });
 
-    test('rename, updateContent and changeCategory mutate the prompt', () {
-      final p = service.createPrompt(name: 'a', content: 'x');
-      service.rename(p.id, 'b');
-      service.updateContent(p.id, 'y {{v}}');
-      service.changeCategory(p.id, PromptCategory.code);
+    test('updateField transforms and stores the new model', () {
+      final m = service.createModel(
+          name: 'a', provider: LlmProvider.openai, contextWindow: 1000,
+          maxOutputTokens: 100, inputCostPerMillion: 1, outputCostPerMillion: 2);
+      service.updateField(m.id, (model) => model.changeCapabilities(
+          {ModelCapability.audio}));
+      service.updateField(m.id, (model) => model.changeStatus(ModelStatus.preview));
 
-      final updated = service.findById(p.id)!;
-      expect(updated.name, 'b');
-      expect(updated.content, 'y {{v}}');
-      expect(updated.category, PromptCategory.code);
-      expect(updated.variables, {'v'});
-      expect(service.rename('missing', 'z'), isNull);
+      final updated = service.findById(m.id)!;
+      expect(updated.capabilities, contains(ModelCapability.audio));
+      expect(updated.status, ModelStatus.preview);
+      expect(service.updateField('missing', (m) => m), isNull);
     });
 
-    test('deletePrompt removes and reports existence', () {
-      final p = service.createPrompt(name: 'a', content: 'x');
-      expect(service.deletePrompt(p.id), isTrue);
-      expect(service.deletePrompt(p.id), isFalse);
+    test('deleteModel removes and reports existence', () {
+      final m = service.createModel(
+          name: 'a', provider: LlmProvider.openai, contextWindow: 1,
+          maxOutputTokens: 1, inputCostPerMillion: 0, outputCostPerMillion: 0);
+      expect(service.deleteModel(m.id), isTrue);
+      expect(service.deleteModel(m.id), isFalse);
       expect(service.length, 0);
     });
 
-    test('byCategory filters, search matches name and description', () {
-      service.createPrompt(name: 'Translate', content: 'a', category: PromptCategory.translation);
-      service.createPrompt(name: 'Fix bug', content: 'b', category: PromptCategory.code, description: 'make tests pass');
+    test('filters by provider, status, and capability; search matches names', () {
+      service.createModel(
+          name: 'gpt-4o', provider: LlmProvider.openai, contextWindow: 128000,
+          maxOutputTokens: 4096, inputCostPerMillion: 2.5,
+          outputCostPerMillion: 10,
+          capabilities: {ModelCapability.vision},
+          description: 'flagship vision model');
+      service.createModel(
+          name: 'llama3', provider: LlmProvider.meta, contextWindow: 8192,
+          maxOutputTokens: 2048, inputCostPerMillion: 0.1,
+          outputCostPerMillion: 0.4,
+          status: ModelStatus.deprecated);
 
-      expect(service.byCategory(PromptCategory.code), hasLength(1));
-      expect(service.search('bug'), hasLength(1));
-      expect(service.search('TESTS'), hasLength(1));
+      expect(service.byProvider(LlmProvider.openai), hasLength(1));
+      expect(service.byStatus(ModelStatus.deprecated), hasLength(1));
+      expect(service.byCapability(ModelCapability.vision), hasLength(1));
+      expect(service.search('FLAGSHIP'), hasLength(1));
       expect(service.search('zzz'), isEmpty);
+    });
+
+    test('sortedByCost orders cheapest first', () {
+      service.createModel(
+          name: 'cheap', provider: LlmProvider.local, contextWindow: 1,
+          maxOutputTokens: 1, inputCostPerMillion: 0.01,
+          outputCostPerMillion: 0.01);
+      service.createModel(
+          name: 'pricey', provider: LlmProvider.openai, contextWindow: 1,
+          maxOutputTokens: 1, inputCostPerMillion: 10,
+          outputCostPerMillion: 40);
+
+      expect(service.sortedByCost().first.name, 'cheap');
+      expect(service.sortedByCost().last.name, 'pricey');
+    });
+
+    test('statistics counts providers and statuses', () {
+      service.createModel(
+          name: 'a', provider: LlmProvider.openai, contextWindow: 1,
+          maxOutputTokens: 1, inputCostPerMillion: 0, outputCostPerMillion: 0);
+      service.createModel(
+          name: 'b', provider: LlmProvider.openai, contextWindow: 1,
+          maxOutputTokens: 1, inputCostPerMillion: 0, outputCostPerMillion: 0,
+          status: ModelStatus.preview);
+
+      final stats = service.statistics();
+      expect(stats['total'], 2);
+      expect(stats['openai'], 2);
+      expect(stats['status_available'], 1);
+      expect(stats['status_preview'], 1);
     });
   });
 
   group('TestHistoryService', () {
-    test('stores results newest first and computes statistics', () {
+    test('stores results and computes statistics', () {
       final history = TestHistoryService();
-      PromptTestResult result({
-        required String id,
-        required bool success,
-        required int latency,
-      }) =>
-          PromptTestResult(
+      ModelTestResult result({required String id, required bool success, required int latency}) =>
+          ModelTestResult(
             id: id,
-            promptId: 'p',
-            promptName: 'p',
-            model: 'm',
-            renderedPrompt: 'x',
+            modelId: 'm',
+            modelName: 'm',
+            provider: LlmProvider.openai,
             latencyMs: latency,
             testedAt: DateTime(2024),
-            response: success ? 'ok' : null,
             error: success ? null : 'boom',
           );
 
       history.add(result(id: 'a', success: true, latency: 100));
       history.add(result(id: 'b', success: false, latency: 200));
-      history.add(result(id: 'c', success: true, latency: 300));
 
-      expect(history.length, 3);
-      expect(history.getAll().map((r) => r.id), ['c', 'b', 'a']);
-      expect(history.successCount, 2);
+      expect(history.length, 2);
+      expect(history.getAll().map((r) => r.id), ['b', 'a']);
+      expect(history.successCount, 1);
       expect(history.failureCount, 1);
-      expect(history.averageLatencyMs, 200);
-      expect(history.recent(2).map((r) => r.id), ['c', 'b']);
+      expect(history.averageLatencyMs, 150);
     });
   });
 }

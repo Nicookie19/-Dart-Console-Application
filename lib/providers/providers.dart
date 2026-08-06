@@ -2,12 +2,12 @@ import 'dart:io';
 
 import 'package:riverpod/riverpod.dart';
 
-import '../controllers/history_controller.dart';
-import '../controllers/prompt_controller.dart';
-import '../models/prompt.dart';
-import '../models/prompt_test_result.dart';
+import '../controllers/model_controller.dart';
+import '../controllers/test_history_controller.dart';
+import '../models/llm_model.dart';
+import '../models/model_test_result.dart';
 import '../services/llm_service.dart';
-import '../services/prompt_service.dart';
+import '../services/model_service.dart';
 import '../services/test_history_service.dart';
 
 /// --- Dependency Injection (Riverpod) ---
@@ -15,11 +15,11 @@ import '../services/test_history_service.dart';
 /// Every dependency is declared here as a provider:
 ///
 /// 1. [llmConfigProvider]    - LLM connection settings (env vars + defaults).
-/// 2. [llmServiceProvider]   - HTTP client for chat completions.
-/// 3. [promptServiceProvider]- prompt library (business logic).
+/// 2. [llmServiceProvider]   - HTTP client used to ping models.
+/// 3. [modelServiceProvider] - model catalog (business logic).
 /// 4. [testHistoryServiceProvider] - session test-history store.
-/// 5. [promptControllerProvider]   - stateful controller for prompts.
-/// 6. [historyControllerProvider]  - stateful controller for test runs.
+/// 5. [modelControllerProvider]    - stateful controller for the catalog.
+/// 6. [testHistoryControllerProvider] - stateful controller for test runs.
 ///
 /// No class in the app ever constructs its own dependencies; everything
 /// flows through this container. Tests swap implementations via overrides,
@@ -35,17 +35,18 @@ final llmServiceProvider = Provider<LlmService>((ref) {
   return LlmService(ref.watch(llmConfigProvider));
 });
 
-/// The shared [PromptService].
-final promptServiceProvider = Provider<PromptService>((ref) => PromptService());
+/// The shared [ModelService].
+final modelServiceProvider = Provider<ModelService>((ref) => ModelService());
 
 /// The shared [TestHistoryService].
 final testHistoryServiceProvider =
     Provider<TestHistoryService>((ref) => TestHistoryService());
 
-/// Exposes the prompt list as state.
-final promptControllerProvider =
-    NotifierProvider<PromptController, List<Prompt>>(PromptController.new);
+/// Exposes the model catalog as state.
+final modelControllerProvider =
+    NotifierProvider<ModelController, List<LlmModel>>(ModelController.new);
 
 /// Exposes the test history as state.
-final historyControllerProvider =
-    NotifierProvider<HistoryController, List<PromptTestResult>>(HistoryController.new);
+final testHistoryControllerProvider =
+    NotifierProvider<TestHistoryController, List<ModelTestResult>>(
+        TestHistoryController.new);

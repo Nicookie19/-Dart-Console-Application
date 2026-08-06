@@ -1,87 +1,99 @@
-import 'package:task_manager_cli/models/prompt.dart';
-import 'package:task_manager_cli/models/prompt_category.dart';
-import 'package:task_manager_cli/models/prompt_test_result.dart';
+import 'package:task_manager_cli/models/llm_model.dart';
+import 'package:task_manager_cli/models/llm_provider.dart';
+import 'package:task_manager_cli/models/model_capability.dart';
+import 'package:task_manager_cli/models/model_status.dart';
+import 'package:task_manager_cli/models/model_test_result.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('Prompt model', () {
-    test('extracts unique {{variables}} from content', () {
-      final prompt = Prompt(
+  LlmModel base() => LlmModel(
         id: '1',
-        name: 'x',
-        content: '{{a}} and {{a}} and {{b}}',
+        name: 'gpt-4o',
+        displayName: 'GPT-4o',
+        provider: LlmProvider.openai,
+        contextWindow: 128000,
+        maxOutputTokens: 16384,
+        inputCostPerMillion: 2.5,
+        outputCostPerMillion: 10,
+        capabilities: {ModelCapability.vision, ModelCapability.reasoning},
         createdAt: DateTime(2024),
       );
-      expect(prompt.variables, {'a', 'b'});
+
+  group('LlmModel', () {
+    test('label falls back to the model id when no display name is set', () {
+      final noDisplay = base().changeDisplayName(null);
+      expect(noDisplay.label, 'gpt-4o');
+      expect(base().label, 'GPT-4o');
     });
 
-    test('detects no variables when content is plain', () {
-      final prompt = Prompt(
-        id: '1',
-        name: 'x',
-        content: 'Hello world',
-        createdAt: DateTime(2024),
-      );
-      expect(prompt.variables, isEmpty);
+    test('costForTokens computes a 50/50 input/output round trip', () {
+      final model = base();
+      final cost = model.costForTokens(10000);
+      expect(cost, closeTo(0.0625, 0.0001));
     });
 
-    test('render substitutes known variables and leaves unknown ones intact', () {
-      final prompt = Prompt(
-        id: '1',
-        name: 'x',
-        content: 'Hi {{name}}, your code is {{code}}.',
-        createdAt: DateTime(2024),
+    test('hasCapabilities requires every listed capability', () {
+      final model = base();
+      expect(model.hasCapabilities([ModelCapability.vision]), isTrue);
+      expect(
+        model.hasCapabilities([
+          ModelCapability.vision,
+          ModelCapability.code,
+        ]),
+        isFalse,
       );
-      final rendered = prompt.render({'name': 'Ana', 'code': '42'});
-      expect(rendered, 'Hi Ana, your code is 42.');
     });
 
-    test('copyWith helpers preserve id and createdAt', () {
-      final prompt = Prompt(
-        id: '1',
-        name: 'Old',
-        content: 'abc',
-        createdAt: DateTime(2024),
-      );
-      final renamed = prompt.rename('New');
-      expect(renamed.id, '1');
-      expect(renamed.name, 'New');
-      expect(renamed.content, 'abc');
-      expect(renamed.updatedAt, isNotNull);
+    test('copy helpers preserve id and stamp updatedAt', () {
+      final updated = base().rename('gpt-5').changeStatus(ModelStatus.preview);
+      expect(updated.id, '1');
+      expect(updated.name, 'gpt-5');
+      expect(updated.status, ModelStatus.preview);
+      expect(updated.updatedAt, isNotNull);
     });
   });
 
-  group('PromptCategory', () {
-    test('parses by label and name, case-insensitively', () {
-      expect(PromptCategory.fromInput('code'), PromptCategory.code);
-      expect(PromptCategory.fromInput('Code'), PromptCategory.code);
-      expect(PromptCategory.fromInput('reasoning'), PromptCategory.reasoning);
+  group('enums', () {
+    test('parse by label and name, case-insensitively', () {
+      expect(LlmProvider.fromInput('Anthropic'), LlmProvider.anthropic);
+      expect(LlmProvider.fromInput('meta'), LlmProvider.meta);
+      expect(ModelStatus.fromInput('preview'), ModelStatus.preview);
+      expect(ModelCapability.fromInput('Vision'), ModelCapability.vision);
     });
 
-    test('throws FormatException on an unknown category', () {
-      expect(() => PromptCategory.fromInput('sports'),
+    test('parseSet accepts comma/space separated lists', () {
+      final set = ModelCapability.parseSet('vision, code reasoning');
+      expect(set, {
+        ModelCapability.vision,
+        ModelCapability.code,
+        ModelCapability.reasoning,
+      });
+      expect(ModelCapability.parseSet(''), isEmpty);
+    });
+
+    test('throw FormatException on unknown values', () {
+      expect(() => LlmProvider.fromInput('nasa'), throwsA(isA<FormatException>()));
+      expect(() => ModelStatus.fromInput('zzz'), throwsA(isA<FormatException>()));
+      expect(() => ModelCapability.fromInput('x'),
           throwsA(isA<FormatException>()));
     });
   });
 
-  group('PromptTestResult', () {
-    test('success is true only when there is a response and no error', () {
-      final ok = PromptTestResult(
+  group('ModelTestResult', () {
+    test('success is true only when there is no error', () {
+      final ok = ModelTestResult(
         id: '1',
-        promptId: 'p',
-        promptName: 'n',
-        model: 'm',
-        renderedPrompt: 'x',
+        modelId: 'm',
+        modelName: 'm',
+        provider: LlmProvider.local,
         latencyMs: 10,
         testedAt: DateTime(2024),
-        response: 'reply',
       );
-      final fail = PromptTestResult(
+      final fail = ModelTestResult(
         id: '2',
-        promptId: 'p',
-        promptName: 'n',
-        model: 'm',
-        renderedPrompt: 'x',
+        modelId: 'm',
+        modelName: 'm',
+        provider: LlmProvider.local,
         latencyMs: 5,
         testedAt: DateTime(2024),
         error: 'boom',

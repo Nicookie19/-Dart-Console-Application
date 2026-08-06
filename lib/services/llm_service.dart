@@ -38,19 +38,20 @@ class LlmException implements Exception {
   final int? statusCode;
 
   @override
-  String toString() =>
-      statusCode == null ? 'LlmException: $message' : 'LlmException ($statusCode): $message';
+  String toString() => statusCode == null
+      ? 'LlmException: $message'
+      : 'LlmException ($statusCode): $message';
 }
 
-/// A successful LLM reply.
-class LlmResponse {
-  const LlmResponse({required this.text, required this.latencyMs});
+/// A successful connectivity reply.
+class LlmPing {
+  const LlmPing({required this.latencyMs});
 
-  final String text;
   final int latencyMs;
 }
 
-/// Sends prompts to an OpenAI-compatible chat completions API.
+/// Sends lightweight connectivity checks ("pings") to an OpenAI-compatible
+/// chat completions API.
 ///
 /// The underlying [http.Client] is injected through the constructor so tests
 /// can substitute a [MockClient] — no real network is ever required.
@@ -61,14 +62,11 @@ class LlmService {
   final LlmConfig _config;
   final http.Client _client;
 
-  /// Sends [prompt] to the configured model and returns the reply.
+  /// Sends a minimal one-token request for [model] to confirm the model is
+  /// reachable and authenticated.
   ///
   /// Throws [LlmException] when the request fails for any reason.
-  Future<LlmResponse> complete({
-    required String prompt,
-    String? model,
-    double temperature = 0.7,
-  }) async {
+  Future<LlmPing> ping({required String model}) async {
     if (_config.apiKey.isEmpty) {
       throw const LlmException(
         'No API key configured. Set the OPENAI_API_KEY environment variable, '
@@ -88,10 +86,10 @@ class LlmService {
           'Authorization': 'Bearer ${_config.apiKey}',
         },
         body: jsonEncode({
-          'model': model ?? _config.defaultModel,
-          'temperature': temperature,
+          'model': model,
+          'max_tokens': 1,
           'messages': [
-            {'role': 'user', 'content': prompt},
+            {'role': 'user', 'content': 'ping'},
           ],
         }),
       );
@@ -107,14 +105,6 @@ class LlmService {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final choices = data['choices'] as List<dynamic>? ?? const [];
-    if (choices.isEmpty) {
-      throw const LlmException('The LLM API returned an empty response.');
-    }
-    final content =
-        (choices.first as Map<String, dynamic>)['message']?['content'] as String?;
-
-    return LlmResponse(text: content ?? '', latencyMs: stopwatch.elapsedMilliseconds);
+    return LlmPing(latencyMs: stopwatch.elapsedMilliseconds);
   }
 }

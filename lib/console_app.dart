@@ -2,13 +2,16 @@ import 'dart:io';
 
 import 'package:riverpod/riverpod.dart';
 
-import 'controllers/prompt_controller.dart';
-import 'models/prompt.dart';
-import 'models/prompt_category.dart';
-import 'models/prompt_test_result.dart';
+import 'controllers/model_controller.dart';
+import 'models/llm_model.dart';
+import 'models/llm_provider.dart';
+import 'models/model_capability.dart';
+import 'models/model_status.dart';
+import 'models/model_test_result.dart';
 import 'providers/providers.dart';
+import 'services/model_service.dart';
 
-/// Interactive console front-end for the LLM Prompt Manager & Tester.
+/// Interactive console front-end for the LLM Model Manager.
 ///
 /// The UI layer only talks to Riverpod (via a [ProviderContainer]); it never
 /// creates services, controllers, or HTTP clients directly.
@@ -25,24 +28,26 @@ class ConsoleApp {
       _printMenu();
       switch (_readLine('> ').trim()) {
         case '1':
-          _addPrompt();
+          _addModel();
         case '2':
-          _listPrompts(_promptState);
+          _listModels(_modelState);
         case '3':
-          _filterByCategory();
+          _filterModels();
         case '4':
           _search();
         case '5':
           _viewDetails();
         case '6':
-          _editPrompt();
+          _editModel();
         case '7':
-          _deletePrompt();
+          _deleteModel();
         case '8':
-          await _testPrompt();
+          _compareModels();
         case '9':
-          _showHistory();
+          await _testModel();
         case '10':
+          _showHistory();
+        case '11':
           _dashboard();
         case '0':
           running = false;
@@ -54,96 +59,155 @@ class ConsoleApp {
     _container.dispose();
   }
 
-  // ------------------------------------------------------------- prompt menu
+  // --------------------------------------------------------------- add/list
 
-  void _addPrompt() {
-    final name = _readLine('Name: ').trim();
-    if (name.isEmpty) return _error('Name cannot be empty.');
-    final category =
-        _readCategory('Category [General]: ', defaultTo: PromptCategory.general);
-    final description = _readLine('Description (optional): ').trim();
-    _info('Enter the prompt template. You may use {{variables}}:');
-    final content = _readMultiline('Content (finish with a line containing only "."): ');
+  void _addModel() {
+    final name = _readLine('Model id (e.g. gpt-4o): ').trim();
+    if (name.isEmpty) return _error('Model id cannot be empty.');
+    final displayName = _readLine('Display name (optional): ').trim();
+    final provider = _readProvider('Provider (OpenAI): ',
+        defaultTo: LlmProvider.openai);
+    final contextWindow = _readInt('Context window (tokens, e.g. 128000): ',
+        minValue: 1, defaultTo: 128000);
+    final maxOutput = _readInt('Max output tokens (e.g. 4096): ',
+        minValue: 1, defaultTo: 4096);
+    final inputCost =
+        _readDouble('Input cost per 1M tokens (USD, e.g. 2.50): ', minValue: 0);
+    final outputCost =
+        _readDouble('Output cost per 1M tokens (USD): ', minValue: 0);
+    final capabilities =
+        _readCapabilities(_readLine('Capabilities (comma-separated, optional): '));
+    final status = _readStatus('Status [Available]: ',
+        defaultTo: ModelStatus.available);
+    _info('Description (finish with a line containing only "."):');
+    final description = _readMultiline();
 
     try {
-      final prompt = _promptController.addPrompt(
+      final model = _modelController.addModel(
         name: name,
-        content: content,
-        category: category,
+        displayName: displayName.isEmpty ? null : displayName,
+        provider: provider,
+        contextWindow: contextWindow,
+        maxOutputTokens: maxOutput,
+        inputCostPerMillion: inputCost,
+        outputCostPerMillion: outputCost,
+        capabilities: capabilities,
+        status: status,
         description: description,
       );
-      _success('Prompt "${prompt.name}" created.');
-      if (prompt.variables.isNotEmpty) {
-        _info('Detected variables: ${prompt.variables.join(', ')}');
-      }
+      _success('Model "$model" added.');
     } on ArgumentError catch (e) {
-      _error(e.message ?? 'Invalid prompt.');
+      _error(e.message ?? 'Invalid model.');
     }
   }
 
-  void _listPrompts(List<Prompt> prompts) {
-    if (prompts.isEmpty) return _info('No prompts yet. Add one from the menu.');
-    _success('${prompts.length} prompt(s):');
-    _printPrompts(prompts);
+  void _listModels(List<LlmModel> models) {
+    if (models.isEmpty) return _info('No models in the catalog yet. Add one from the menu.');
+    _success('${models.length} model(s):');
+    _printModels(models);
   }
 
-  void _filterByCategory() {
-    final category = _readCategory(_readLine('Category: '));
-    final list = _container.read(promptServiceProvider).byCategory(category);
-    if (list.isEmpty) return _info('No prompts in the ${category.label} category.');
-    _success('${list.length} prompt(s) in ${category.label}:');
-    _printPrompts(list);
+  void _filterModels() {
+    print('''
+FILTER BY
+  1. Provider
+  2. Status
+  3. Capability
+  0. Back''');
+    switch (_readLine('> ').trim()) {
+      case '1':
+        final provider = _readProvider('Provider: ');
+        _listModels(_service.byProvider(provider));
+      case '2':
+        final status = _readStatus('Status: ');
+        _listModels(_service.byStatus(status));
+      case '3':
+        final capability =
+            _readCapability('Capability: ');
+        _listModels(_service.byCapability(capability));
+      case '0':
+        return;
+      default:
+        _error('Unknown option.');
+    }
   }
 
   void _search() {
     final query = _readLine('Search: ').trim();
-    final results = _container.read(promptServiceProvider).search(query);
-    if (results.isEmpty) return _info('No prompts match "$query".');
-    _listPrompts(results);
+    final results = _service.search(query);
+    if (results.isEmpty) return _info('No models match "$query".');
+    _listModels(results);
   }
+
+  // ---------------------------------------------------------------- details
 
   void _viewDetails() {
-    final prompt = _selectPrompt();
-    if (prompt == null) return;
-    _showPrompt(prompt);
+    final model = _selectModel();
+    if (model == null) return;
+    _printModel(model);
   }
 
-  void _editPrompt() {
-    final prompt = _selectPrompt();
-    if (prompt == null) return;
+  void _editModel() {
+    final model = _selectModel();
+    if (model == null) return;
 
     var editing = true;
     while (editing) {
-      print('\nEDIT "${prompt.name}"');
+      print('\nEDIT "${model.label}"');
       print('  1. Rename');
-      print('  2. Edit content');
-      print('  3. Edit description');
-      print('  4. Change category');
+      print('  2. Display name');
+      print('  3. Provider');
+      print('  4. Context window');
+      print('  5. Max output tokens');
+      print('  6. Costs (input/output per 1M)');
+      print('  7. Capabilities');
+      print('  8. Status');
+      print('  9. Description');
       print('  0. Back');
       switch (_readLine('> ').trim()) {
         case '1':
           final name = _readLine('New name: ').trim();
-          _promptController.rename(prompt.id, name)
-              ? _success('Renamed to "$name".')
-              : _error('Rename failed.');
+          name.isEmpty
+              ? _error('Name cannot be empty.')
+              : _apply(() => _modelController.rename(model.id, name));
         case '2':
-          _info('Enter new content (current variables will be replaced):');
-          final content = _readMultiline('Content (".", empty, to cancel): ');
-          if (content.isNotEmpty) {
-            _promptController.updateContent(prompt.id, content)
-                ? _success('Content updated.')
-                : _error('Update failed.');
-          }
+          final display = _readLine('New display name (empty to clear): ').trim();
+          _apply(() => _modelController
+              .update(model.id, (m) => m.changeDisplayName(display.isEmpty ? null : display)));
         case '3':
-          final description = _readLine('New description: ').trim();
-          _promptController.updateDescription(prompt.id, description)
-              ? _success('Description updated.')
-              : _error('Update failed.');
+          final provider = _readProvider('New provider: ');
+          _apply(() =>
+              _modelController.update(model.id, (m) => m.changeProvider(provider)));
         case '4':
-          final category = _readCategory(_readLine('New category: '));
-          _promptController.changeCategory(prompt.id, category)
-              ? _success('Category updated.')
-              : _error('Update failed.');
+          final value = _readInt('New context window: ', minValue: 1);
+          _apply(() => _modelController
+              .update(model.id, (m) => m.changeContextWindow(value)));
+        case '5':
+          final value = _readInt('New max output tokens: ', minValue: 1);
+          _apply(() =>
+              _modelController.update(model.id, (m) => m.changeMaxOutput(value)));
+        case '6':
+          final input = _readDouble('New input cost per 1M: ', minValue: 0);
+          final output = _readDouble('New output cost per 1M: ', minValue: 0);
+          _apply(() => _modelController
+              .update(model.id, (m) => m.changeCosts(input: input, output: output)));
+        case '7':
+          final caps =
+              _readCapabilities(_readLine('New capabilities (comma-separated): '));
+          _apply(() => _modelController
+              .update(model.id, (m) => m.changeCapabilities(caps)));
+        case '8':
+          final status = _readStatus('New status: ');
+          _apply(() =>
+              _modelController.update(model.id, (m) => m.changeStatus(status)));
+        case '9':
+          _info('New description (".", empty, to keep):');
+          final description = _readMultiline();
+          if (description == model.description && description.isNotEmpty == false) {
+            break;
+          }
+          _apply(() => _modelController
+              .update(model.id, (m) => m.changeDescription(description)));
         case '0':
           editing = false;
         default:
@@ -152,72 +216,82 @@ class ConsoleApp {
     }
   }
 
-  void _deletePrompt() {
-    final prompt = _selectPrompt();
-    if (prompt == null) return;
+  void _deleteModel() {
+    final model = _selectModel();
+    if (model == null) return;
 
     final confirm =
-        _readLine('Delete "${prompt.name}"? (y/N): ').trim().toLowerCase();
+        _readLine('Delete "${model.label}"? (y/N): ').trim().toLowerCase();
     if (confirm != 'y' && confirm != 'yes') return _info('Deletion cancelled.');
 
-    _promptController.delete(prompt.id)
-        ? _success('"${prompt.name}" deleted.')
+    _modelController.delete(model.id)
+        ? _success('"${model.label}" deleted.')
         : _error('Delete failed.');
+  }
+
+  void _compareModels() {
+    final a = _selectModel(prompt: 'first model');
+    if (a == null) return;
+    final b = _selectModel(prompt: 'second model');
+    if (b == null) return;
+
+    final w1 = a.label.length > b.label.length ? a.label.length : b.label.length;
+    final w2 = 6;
+    String cell(String header, String va, String vb) {
+      final h = header.padRight(w1 + w2 + 4);
+      return '  $h| $va | $vb';
+    }
+
+    print('\n  ${'Field'.padRight(w1 + w2 + 4)}| ${a.label.padRight(w1)} | $b');
+    print('  ${'-' * (w1 + w2 + 4 + w1 + 7)}');
+    print(cell('provider', a.provider.label, b.provider.label));
+    print(cell('context', _fmtInt(a.contextWindow), _fmtInt(b.contextWindow)));
+    print(cell('max out', _fmtInt(a.maxOutputTokens), _fmtInt(b.maxOutputTokens)));
+    print(cell('cost/1M in/out', _fmtCost(a), _fmtCost(b)));
+    print(cell('10k tokens', '\$${a.costForTokens(10000).toStringAsFixed(3)}',
+        '\$${b.costForTokens(10000).toStringAsFixed(3)}'));
+    print(cell('caps', a.capabilities.isEmpty ? '-' : a.capabilities.length.toString(),
+        b.capabilities.isEmpty ? '-' : b.capabilities.length.toString()));
+    print(cell('status', a.status.label, b.status.label));
   }
 
   // ---------------------------------------------------------------- testing
 
-  Future<void> _testPrompt() async {
-    final prompt = _selectPrompt();
-    if (prompt == null) return;
+  Future<void> _testModel() async {
+    final model = _selectModel(prompt: 'model to test');
+    if (model == null) return;
 
-    final variables = <String, String>{};
-    if (prompt.variables.isNotEmpty) {
-      _info('This prompt uses variables: ${prompt.variables.join(', ')}');
-      for (final variable in prompt.variables) {
-        variables[variable] = _readLine('  $variable: ').trim();
-      }
+    _info('Pinging "${model.name}" via ${_container.read(llmConfigProvider).baseUrl} ...');
+    final result =
+        await _container.read(testHistoryControllerProvider.notifier).pingModel(model);
+
+    if (result.success) {
+      _success('Reachable — ${result.latencyMs}ms');
+    } else {
+      _error('Failed after ${result.latencyMs}ms: ${result.error}');
     }
-
-    final defaultModel = _container.read(llmConfigProvider).defaultModel;
-    final modelInput = _readLine('Model [$defaultModel]: ').trim();
-    final model = modelInput.isEmpty ? defaultModel : modelInput;
-
-    _info('Sending to $model ... (this may take a few seconds)');
-    final result = await _container
-        .read(historyControllerProvider.notifier)
-        .runTest(prompt, variables, model: model);
-
-    _printTestResult(result);
-    _success(result.success
-        ? 'Test recorded in history.'
-        : 'Failure recorded in history.');
+    _success('Test recorded in history.');
   }
 
   void _showHistory() {
-    final results = _historyState;
-    if (results.isEmpty) return _info('No tests run yet. Use menu option 8.');
+    final results = _testHistoryState;
+    if (results.isEmpty) return _info('No tests run yet. Use menu option 9.');
 
     _success('${results.length} test(s):');
     for (var i = 0; i < results.length; i++) {
       final r = results[i];
       final icon = r.success ? '\x1B[32m[ok]\x1B[0m' : '\x1B[31m[!]\x1B[0m';
-      print('  ${i + 1}. $icon ${r.promptName} (${r.model}) - ${r.latencyMs}ms');
+      print('  ${i + 1}. $icon ${r.modelName} (${r.provider.label}) - ${r.latencyMs}ms');
     }
 
     final raw = _readLine('View details (number, 0 to go back): ').trim();
     final index = int.tryParse(raw);
     if (index == null || index < 1 || index > results.length) return;
     final r = results[index - 1];
-    print('\n=== ${r.success ? 'SUCCESS' : 'FAILURE'} | ${r.promptName} | '
-        '${r.model} | ${r.latencyMs}ms ===');
-    _info('Sent prompt:');
-    print(r.renderedPrompt);
     if (r.success) {
-      _info('Response:');
-      print(r.response);
+      _success('${r.modelName} was reachable in ${r.latencyMs}ms (${r.testedAt}).');
     } else {
-      _error('Error:');
+      _error('${r.modelName} failed in ${r.latencyMs}ms (${r.testedAt}):');
       print(r.error);
     }
   }
@@ -225,118 +299,172 @@ class ConsoleApp {
   // ---------------------------------------------------------------- dashboard
 
   void _dashboard() {
-    final prompts = _promptState;
-    final history = _historyState;
+    final models = _modelState;
+    final tests = _testHistoryState;
+    final avgCtx = models.isEmpty
+        ? 0
+        : models.fold<int>(0, (s, m) => s + m.contextWindow) ~/ models.length;
 
     final width = 46;
     _divider(width);
     _center('DASHBOARD', width);
-    _center('prompts: ${prompts.length}', width);
-    for (final category in PromptCategory.values) {
-      final count = prompts.where((p) => p.category == category).length;
-      if (count > 0) _center('  ${category.label}: $count', width);
+    _center('models: ${models.length}', width);
+    for (final provider in LlmProvider.values) {
+      final count = models.where((m) => m.provider == provider).length;
+      if (count > 0) _center('  ${provider.label}: $count', width);
     }
-    _center('tests: ${history.length}', width);
-    _center('  succeeded: ${history.where((r) => r.success).length}', width);
-    _center('  failed: ${history.where((r) => !r.success).length}', width);
-    _center('  average latency: ${_avgLatency(history)}ms', width);
+    _center('average context: ${_fmtInt(avgCtx)} tokens', width);
+    _center('tests: ${tests.length}', width);
+    _center('  ok: ${tests.where((r) => r.success).length}', width);
+    _center('  failed: ${tests.where((r) => !r.success).length}', width);
+    _center('  average latency: ${_avgLatency(tests)}ms', width);
     _divider(width);
-    _success('Tip: set OPENAI_API_KEY and OPENAI_MODEL to run live tests.');
+    _success('Tip: set OPENAI_API_KEY to ping-test your OpenAI-compatible models.');
   }
 
   // ------------------------------------------------------------------ helpers
 
-  PromptController get _promptController =>
-      _container.read(promptControllerProvider.notifier);
+  ModelController get _modelController =>
+      _container.read(modelControllerProvider.notifier);
 
-  List<Prompt> get _promptState => _container.read(promptControllerProvider);
+  List<LlmModel> get _modelState => _container.read(modelControllerProvider);
 
-  List<PromptTestResult> get _historyState =>
-      _container.read(historyControllerProvider);
+  List<ModelTestResult> get _testHistoryState =>
+      _container.read(testHistoryControllerProvider);
 
-  int _avgLatency(List<PromptTestResult> results) {
+  ModelService get _service => _container.read(modelServiceProvider);
+
+  int _avgLatency(List<ModelTestResult> results) {
     if (results.isEmpty) return 0;
     return results.fold<int>(0, (s, r) => s + r.latencyMs) ~/ results.length;
   }
 
-  /// Lets the user pick a prompt from the list; returns null if aborted.
-  Prompt? _selectPrompt() {
-    final prompts = _promptState;
-    if (prompts.isEmpty) {
-      _info('No prompts yet. Add one first.');
+  void _apply(bool Function() action) {
+    action() ? _success('Updated.') : _error('Update failed.');
+  }
+
+  String _fmtInt(int value) => value.toString().replaceAllMapped(
+      RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+
+  String _fmtCost(LlmModel model) =>
+      '\$${model.inputCostPerMillion.toStringAsFixed(2)} / '
+      '\$${model.outputCostPerMillion.toStringAsFixed(2)}';
+
+  LlmModel? _selectModel({String prompt = 'a model'}) {
+    final models = _modelState;
+    if (models.isEmpty) {
+      _info('No models in the catalog yet.');
       return null;
     }
-    _info('Choose a prompt:');
-    for (var i = 0; i < prompts.length; i++) {
-      final prompt = prompts[i];
-      final vars = prompt.variables.isEmpty
-          ? ''
-          : ' \x1B[33m({{${prompt.variables.join('}}, {{')}}})\x1B[0m';
-      print('  ${i + 1}. $prompt$vars');
+    _info('Choose $prompt:');
+    for (var i = 0; i < models.length; i++) {
+      final m = models[i];
+      print('  ${i + 1}. $m (${_fmtInt(m.contextWindow)} ctx, ${_fmtCost(m)})');
     }
     final raw = _readLine('Number (or 0 to cancel): ').trim();
     final index = int.tryParse(raw);
-    if (index == null || index < 0 || index > prompts.length) {
+    if (index == null || index < 0 || index > models.length) {
       _error('Invalid number.');
       return null;
     }
-    return index == 0 ? null : prompts[index - 1];
+    return index == 0 ? null : models[index - 1];
   }
 
-  void _printPrompts(List<Prompt> prompts) {
-    for (final prompt in prompts) {
-      final vars = prompt.variables.isEmpty
-          ? ''
-          : ' \x1B[33m{{${prompt.variables.join(', ')}}}\x1B[0m';
-      print('  ${prompt.category.label}: ${prompt.name}$vars'
-          '${prompt.description.isEmpty ? '' : ' - ${prompt.description}'}');
+  void _printModels(List<LlmModel> models) {
+    for (final model in models) {
+      print('  ${model.provider.label}: ${model.label} '
+          '(${_fmtInt(model.contextWindow)} ctx, ${_fmtCost(model)}) - ${model.status.label}');
     }
   }
 
-  void _showPrompt(Prompt prompt) {
-    print('\n${prompt.category.label} prompt: "${prompt.name}"');
-    if (prompt.description.isNotEmpty) {
-      _info('Description: ${prompt.description}');
+  void _printModel(LlmModel model) {
+    print('\n[${model.provider.label}] ${model.label} (${model.status.label})');
+    if (model.displayName != null) _info('model id: ${model.name}');
+    print('  context window : ${_fmtInt(model.contextWindow)} tokens');
+    print('  max output     : ${_fmtInt(model.maxOutputTokens)} tokens');
+    print('  cost / 1M in   : \$${model.inputCostPerMillion.toStringAsFixed(2)}');
+    print('  cost / 1M out   : \$${model.outputCostPerMillion.toStringAsFixed(2)}');
+    print('  10k round trip  : \$${model.costForTokens(10000).toStringAsFixed(2)}');
+    if (model.capabilities.isNotEmpty) {
+      print('  capabilities   : ${model.capabilities.map((c) => c.label).join(', ')}');
     }
-    if (prompt.variables.isNotEmpty) {
-      _info('Variables: ${prompt.variables.join(', ')}');
-    }
-    _info('Content:');
-    print(prompt.content);
-  }
-
-  void _printTestResult(PromptTestResult r) {
-    print('\n=== ${r.success ? 'SUCCESS' : 'FAILURE'} | ${r.promptName} | '
-        '${r.model} | ${r.latencyMs}ms ===');
-    if (r.success) {
-      _info('Response:');
-      print(r.response);
-    } else {
-      _error('Error:');
-      print(r.error);
+    if (model.description.isNotEmpty) {
+      _info('Description:');
+      print(model.description);
     }
   }
 
-  PromptCategory _readCategory(String prompt, {PromptCategory? defaultTo}) {
+  LlmProvider _readProvider(String prompt, {LlmProvider? defaultTo}) {
     while (true) {
       final raw = _readLine(prompt).trim();
       if (raw.isEmpty && defaultTo != null) return defaultTo;
-      if (raw.isEmpty) {
-        _error('Category cannot be empty.');
-        continue;
-      }
       try {
-        return PromptCategory.fromInput(raw);
+        return LlmProvider.fromInput(raw);
       } on FormatException catch (e) {
         _error(e.message);
       }
     }
   }
 
-  /// Reads multiple lines of input terminated by an empty line or a line
-  /// containing only a dot.
-  String _readMultiline(String prompt) {
-    _info(prompt);
+  ModelStatus _readStatus(String prompt, {ModelStatus? defaultTo}) {
+    while (true) {
+      final raw = _readLine(prompt).trim();
+      if (raw.isEmpty && defaultTo != null) return defaultTo;
+      try {
+        return ModelStatus.fromInput(raw);
+      } on FormatException catch (e) {
+        _error(e.message);
+      }
+    }
+  }
+
+  ModelCapability _readCapability(String prompt) {
+    while (true) {
+      try {
+        return ModelCapability.fromInput(_readLine(prompt));
+      } on FormatException catch (e) {
+        _error(e.message);
+      }
+    }
+  }
+
+  Set<ModelCapability> _readCapabilities(String raw) {
+    while (true) {
+      try {
+        return ModelCapability.parseSet(raw);
+      } on FormatException catch (e) {
+        _error(e.message);
+        raw = _readLine('Capabilities: ');
+      }
+    }
+  }
+
+  int _readInt(String prompt, {int? minValue, int defaultTo = -1}) {
+    while (true) {
+      final raw = _readLine(prompt).trim();
+      if (raw.isEmpty && defaultTo > 0) return defaultTo;
+      final value = int.tryParse(raw);
+      if (value == null || (minValue != null && value < minValue)) {
+        _error('Enter a valid number${minValue == null ? '' : ' (>= $minValue)'}.');
+        continue;
+      }
+      return value;
+    }
+  }
+
+  double _readDouble(String prompt, {double? minValue}) {
+    while (true) {
+      final raw = _readLine(prompt).trim();
+      final value = double.tryParse(raw);
+      if (value == null || (minValue != null && value < minValue)) {
+        _error('Enter a valid number${minValue == null ? '' : ' (>= $minValue)'}.');
+        continue;
+      }
+      return value;
+    }
+  }
+
+  String _readMultiline() {
     final buffer = StringBuffer();
     while (true) {
       final line = _readLine('> ');
@@ -350,33 +478,32 @@ class ConsoleApp {
 
   void _printBanner() {
     final config = _container.read(llmConfigProvider);
-    final keyStatus = config.apiKey.isEmpty ? 'NOT SET' : 'set';
     _divider(46);
-    _center('LLM PROMPT MANAGER & TESTER', 46);
+    _center('LLM MODEL MANAGER', 46);
     _center('Dart + Riverpod (DI) demo', 46);
     _center('Models / Services / Controllers', 46);
     _divider(46);
-    print('  api key : $keyStatus');
-    print('  base url: ${config.baseUrl}');
-    print('  model   : ${config.defaultModel}');
+    print('  api : ${config.apiKey.isEmpty ? 'NOT SET' : 'set'}'
+        '  |  endpoint: ${config.baseUrl}');
     if (config.apiKey.isEmpty) {
-      print('  SET OPENAI_API_KEY to run live tests.');
+      print('  SET OPENAI_API_KEY to ping-test OpenAI-compatible models.');
     }
   }
 
   void _printMenu() {
     print('''
 MAIN MENU
-  1. Add prompt
-  2. List all prompts
-  3. Filter by category
-  4. Search prompts
-  5. View prompt details
-  6. Edit prompt
-  7. Delete prompt
-  8. Test a prompt
-  9. Test history
- 10. Dashboard
+  1. Add model
+  2. List all models
+  3. Filter models
+  4. Search models
+  5. View model details
+  6. Edit model
+  7. Delete model
+  8. Compare models
+  9. Test a model (ping)
+ 10. Test history
+ 11. Dashboard
   0. Exit''');
   }
 
