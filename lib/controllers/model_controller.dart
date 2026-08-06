@@ -1,9 +1,6 @@
 import 'package:riverpod/riverpod.dart';
 
 import '../models/llm_model.dart';
-import '../models/llm_provider.dart';
-import '../models/model_capability.dart';
-import '../models/model_status.dart';
 import '../providers/providers.dart';
 import '../services/model_service.dart';
 
@@ -22,14 +19,14 @@ class ModelController extends Notifier<List<LlmModel>> {
   /// Creates a model and refreshes state. Returns the created model.
   LlmModel addModel({
     required String name,
-    required LlmProvider provider,
+    required String provider,
     required int contextWindow,
     required int maxOutputTokens,
     required double inputCostPerMillion,
     required double outputCostPerMillion,
     String? displayName,
-    Set<ModelCapability> capabilities = const {},
-    ModelStatus status = ModelStatus.available,
+    Set<String> capabilities = const {},
+    String status = 'Available',
     String description = '',
   }) {
     final model = _service.createModel(

@@ -1,11 +1,8 @@
-import 'llm_provider.dart';
-import 'model_capability.dart';
-import 'model_status.dart';
-
 /// An LLM model entry in the managed catalog.
 ///
 /// Immutable by design: updates produce new instances via the `copyWith`
-/// helpers, keeping state changes predictable.
+/// helpers, keeping state changes predictable. Provider, status, and
+/// capabilities are free-form text so any value can be typed.
 class LlmModel {
   const LlmModel({
     required this.id,
@@ -18,7 +15,7 @@ class LlmModel {
     required this.createdAt,
     this.displayName,
     this.capabilities = const {},
-    this.status = ModelStatus.available,
+    this.status = 'Available',
     this.description = '',
     this.updatedAt,
   });
@@ -32,8 +29,8 @@ class LlmModel {
   /// Optional human-friendly name shown instead of [name].
   final String? displayName;
 
-  /// Provider/vendor of the model.
-  final LlmProvider provider;
+  /// Provider/vendor of the model, e.g. `OpenAI`.
+  final String provider;
 
   /// Maximum context size in tokens.
   final int contextWindow;
@@ -47,11 +44,11 @@ class LlmModel {
   /// USD per 1,000,000 output tokens.
   final double outputCostPerMillion;
 
-  /// Capabilities this model supports.
-  final Set<ModelCapability> capabilities;
+  /// Capabilities this model supports (free-form labels).
+  final Set<String> capabilities;
 
-  /// Availability status.
-  final ModelStatus status;
+  /// Availability status, e.g. `Available` or `Preview`.
+  final String status;
 
   /// Optional notes.
   final String description;
@@ -72,17 +69,21 @@ class LlmModel {
         (half / 1e6 * outputCostPerMillion);
   }
 
-  /// True when the model supports every capability in [requiredCapabilities].
-  bool hasCapabilities(Iterable<ModelCapability> requiredCapabilities) =>
-      requiredCapabilities.every(capabilities.contains);
+  /// True when the model supports every capability in [requiredCapabilities]
+  /// (case-insensitive).
+  bool hasCapabilities(Iterable<String> requiredCapabilities) {
+    final own = capabilities.map((c) => c.toLowerCase()).toSet();
+    return requiredCapabilities
+        .map((c) => c.toLowerCase())
+        .every(own.contains);
+  }
 
   LlmModel rename(String newName) => _copyWith(name: newName);
 
   LlmModel changeDisplayName(String? newDisplayName) =>
       _copyWith(displayName: newDisplayName);
 
-  LlmModel changeProvider(LlmProvider newProvider) =>
-      _copyWith(provider: newProvider);
+  LlmModel changeProvider(String newProvider) => _copyWith(provider: newProvider);
 
   LlmModel changeContextWindow(int value) => _copyWith(contextWindow: value);
 
@@ -91,10 +92,10 @@ class LlmModel {
   LlmModel changeCosts({required double input, required double output}) =>
       _copyWith(inputCostPerMillion: input, outputCostPerMillion: output);
 
-  LlmModel changeCapabilities(Set<ModelCapability> value) =>
+  LlmModel changeCapabilities(Set<String> value) =>
       _copyWith(capabilities: Set.unmodifiable(value));
 
-  LlmModel changeStatus(ModelStatus value) => _copyWith(status: value);
+  LlmModel changeStatus(String value) => _copyWith(status: value);
 
   LlmModel changeDescription(String value) => _copyWith(description: value);
 
@@ -103,13 +104,13 @@ class LlmModel {
   LlmModel _copyWith({
     String? name,
     Object? displayName = _unset,
-    LlmProvider? provider,
+    String? provider,
     int? contextWindow,
     int? maxOutputTokens,
     double? inputCostPerMillion,
     double? outputCostPerMillion,
-    Set<ModelCapability>? capabilities,
-    ModelStatus? status,
+    Set<String>? capabilities,
+    String? status,
     String? description,
   }) {
     return LlmModel(
@@ -143,5 +144,5 @@ class LlmModel {
   int get hashCode => id.hashCode;
 
   @override
-  String toString() => '[${provider.label}] $label';
+  String toString() => '[$provider] $label';
 }

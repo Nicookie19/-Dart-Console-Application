@@ -4,14 +4,14 @@ A Dart console application to **catalog, list, and compare LLM models** — prov
 
 ## Features
 
-- Interactive menu-driven console UI with every choice listed up front
+- Interactive menu-driven console UI
 - Create, list, filter, search, edit, and delete model catalog entries
-- Record provider, context window, max output, token pricing, capabilities, and status per model
+- Provider, status, and capabilities are **free-form text** — type anything
+- Record context window, max output, and token pricing (input/output per 1M)
 - Side-by-side model comparison with cost estimates
 - Model detail views with full specifications
 - Dashboard with per-provider counts, average context size, cheapest model, and widest context
-- Every prompt with predefined choices (provider, status, capability) shows the available options
-- 17 passing unit tests
+- 18 passing unit tests
 
 ## Architecture
 
@@ -20,10 +20,7 @@ bin/main.dart          Entry point
 lib/
 ├── console_app.dart         Interactive UI (talks only to Riverpod)
 ├── models/
-│   ├── llm_model.dart       Catalog entity (immutable, cost math)
-│   ├── llm_provider.dart    Provider enum (OpenAI, Anthropic, Google, ...)
-│   ├── model_status.dart    Status enum (Available, Preview, ...)
-│   └── model_capability.dart Capability enum (Vision, Reasoning, ...)
+│   └── llm_model.dart       Catalog entity (immutable, cost math)
 ├── services/
 │   └── model_service.dart       Catalog (business logic + storage)
 ├── controllers/
@@ -84,6 +81,11 @@ dart test
 Example entries:
 
 ```
-[OpenAI] GPT-4o   — 128,000 ctx, $2.50 / $10.00 per 1M, Vision + Code
-[Meta]   Llama 3  — 131,072 ctx, $0.15 / $0.60 per 1M
+[OpenAI]  GPT-4o   — 128,000 ctx, $2.50 / $10.00 per 1M, Vision + Code
+[NVIDIA]  custom-x — 512,000 ctx, $2.00 / $4.00 per 1M, Launching
 ```
+
+Provider, status, and capability inputs accept any text — e.g. `NVIDIA`,
+`Launching`, or `generation` — with no exact-match validation. Filtering
+matches what you type (case-insensitive), and capabilities also match on
+substrings.

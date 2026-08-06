@@ -4,9 +4,6 @@ import 'package:riverpod/riverpod.dart';
 
 import 'controllers/model_controller.dart';
 import 'models/llm_model.dart';
-import 'models/llm_provider.dart';
-import 'models/model_capability.dart';
-import 'models/model_status.dart';
 import 'providers/providers.dart';
 import 'services/model_service.dart';
 
@@ -60,8 +57,9 @@ class ConsoleApp {
     final name = _readLine('Model id (e.g. gpt-4o): ').trim();
     if (name.isEmpty) return _error('Model id cannot be empty.');
     final displayName = _readLine('Display name (optional): ').trim();
-    final provider = _readProvider('Provider (OpenAI): ',
-        defaultTo: LlmProvider.openai);
+    final provider = _readText(
+        'Provider (e.g. OpenAI, Anthropic, Google, Meta, Mistral, Local, Other): ',
+        defaultTo: 'OpenAI');
     final contextWindow = _readInt('Context window (tokens, e.g. 128000): ',
         minValue: 1, defaultTo: 128000);
     final maxOutput = _readInt('Max output tokens (e.g. 4096): ',
@@ -70,9 +68,11 @@ class ConsoleApp {
         _readDouble('Input cost per 1M tokens (USD, e.g. 2.50): ', minValue: 0);
     final outputCost =
         _readDouble('Output cost per 1M tokens (USD): ', minValue: 0);
-    final capabilities = _readCapabilities('Capabilities (comma-separated, optional): ');
-    final status = _readStatus('Status [Available]: ',
-        defaultTo: ModelStatus.available);
+    final capabilities = _parseCapabilities(
+        _readLine('Capabilities (comma-separated, optional, e.g. Vision, Reasoning): '));
+    final status = _readText(
+        'Status (e.g. Available, Preview, Deprecated, Private): ',
+        defaultTo: 'Available');
     _info('Description (finish with a line containing only "."):');
     final description = _readMultiline();
 
@@ -110,14 +110,13 @@ FILTER BY
   0. Back''');
     switch (_readLine('> ').trim()) {
       case '1':
-        final provider = _readProvider('Provider: ');
+        final provider = _readText('Provider: ');
         _listModels(_service.byProvider(provider));
       case '2':
-        final status = _readStatus('Status: ');
+        final status = _readText('Status: ');
         _listModels(_service.byStatus(status));
       case '3':
-        final capability =
-            _readCapability('Capability: ');
+        final capability = _readText('Capability: ');
         _listModels(_service.byCapability(capability));
       case '0':
         return;
@@ -169,7 +168,7 @@ FILTER BY
           _apply(() => _modelController
               .update(model.id, (m) => m.changeDisplayName(display.isEmpty ? null : display)));
         case '3':
-          final provider = _readProvider('New provider: ');
+          final provider = _readText('New provider: ');
           _apply(() =>
               _modelController.update(model.id, (m) => m.changeProvider(provider)));
         case '4':
@@ -186,11 +185,12 @@ FILTER BY
           _apply(() => _modelController
               .update(model.id, (m) => m.changeCosts(input: input, output: output)));
         case '7':
-          final caps = _readCapabilities('New capabilities (comma-separated): ');
+          final caps =
+              _parseCapabilities(_readLine('New capabilities (comma-separated): '));
           _apply(() => _modelController
               .update(model.id, (m) => m.changeCapabilities(caps)));
         case '8':
-          final status = _readStatus('New status: ');
+          final status = _readText('New status: ');
           _apply(() =>
               _modelController.update(model.id, (m) => m.changeStatus(status)));
         case '9':
@@ -237,7 +237,7 @@ FILTER BY
 
     print('\n  ${'Field'.padRight(w1 + w2 + 4)}| ${a.label.padRight(w1)} | $b');
     print('  ${'-' * (w1 + w2 + 4 + w1 + 7)}');
-    print(cell('provider', a.provider.label, b.provider.label));
+    print(cell('provider', a.provider, b.provider));
     print(cell('context', _fmtInt(a.contextWindow), _fmtInt(b.contextWindow)));
     print(cell('max out', _fmtInt(a.maxOutputTokens), _fmtInt(b.maxOutputTokens)));
     print(cell('cost/1M in/out', _fmtCost(a), _fmtCost(b)));
@@ -245,7 +245,7 @@ FILTER BY
         '\$${b.costForTokens(10000).toStringAsFixed(3)}'));
     print(cell('caps', a.capabilities.isEmpty ? '-' : a.capabilities.length.toString(),
         b.capabilities.isEmpty ? '-' : b.capabilities.length.toString()));
-    print(cell('status', a.status.label, b.status.label));
+    print(cell('status', a.status, b.status));
   }
 
   // --------------------------------------------------------------- dashboard
@@ -260,9 +260,12 @@ FILTER BY
     _divider(width);
     _center('DASHBOARD', width);
     _center('models: ${models.length}', width);
-    for (final provider in LlmProvider.values) {
-      final count = models.where((m) => m.provider == provider).length;
-      if (count > 0) _center('  ${provider.label}: $count', width);
+    final byProvider = <String, int>{};
+    for (final model in models) {
+      byProvider[model.provider] = (byProvider[model.provider] ?? 0) + 1;
+    }
+    for (final entry in byProvider.entries) {
+      _center('  ${entry.key}: ${entry.value}', width);
     }
     _center('average context: ${_fmtInt(avgCtx)} tokens', width);
     _divider(width);
@@ -323,13 +326,13 @@ FILTER BY
 
   void _printModels(List<LlmModel> models) {
     for (final model in models) {
-      print('  ${model.provider.label}: ${model.label} '
-          '(${_fmtInt(model.contextWindow)} ctx, ${_fmtCost(model)}) - ${model.status.label}');
+      print('  ${model.provider}: ${model.label} '
+          '(${_fmtInt(model.contextWindow)} ctx, ${_fmtCost(model)}) - ${model.status}');
     }
   }
 
   void _printModel(LlmModel model) {
-    print('\n[${model.provider.label}] ${model.label} (${model.status.label})');
+    print('\n[${model.provider}] ${model.label} (${model.status})');
     if (model.displayName != null) _info('model id: ${model.name}');
     print('  context window : ${_fmtInt(model.contextWindow)} tokens');
     print('  max output     : ${_fmtInt(model.maxOutputTokens)} tokens');
@@ -337,7 +340,7 @@ FILTER BY
     print('  cost / 1M out   : \$${model.outputCostPerMillion.toStringAsFixed(2)}');
     print('  10k round trip  : \$${model.costForTokens(10000).toStringAsFixed(2)}');
     if (model.capabilities.isNotEmpty) {
-      print('  capabilities   : ${model.capabilities.map((c) => c.label).join(', ')}');
+      print('  capabilities   : ${model.capabilities.join(', ')}');
     }
     if (model.description.isNotEmpty) {
       _info('Description:');
@@ -345,52 +348,21 @@ FILTER BY
     }
   }
 
-  LlmProvider _readProvider(String prompt, {LlmProvider? defaultTo}) {
-    while (true) {
-      _options('Provider', LlmProvider.values.map((p) => p.label));
-      final raw = _readLine(prompt).trim();
-      if (raw.isEmpty && defaultTo != null) return defaultTo;
-      try {
-        return LlmProvider.fromInput(raw);
-      } on FormatException catch (e) {
-        _error(e.message);
-      }
-    }
+  /// Reads a free-form text value. No validation: anything the user types is
+  /// accepted. Falls back to [defaultTo] on empty input.
+  String _readText(String prompt, {String defaultTo = ''}) {
+    final raw = _readLine(prompt).trim();
+    return raw.isEmpty && defaultTo.isNotEmpty ? defaultTo : raw;
   }
 
-  ModelStatus _readStatus(String prompt, {ModelStatus? defaultTo}) {
-    while (true) {
-      _options('Status', ModelStatus.values.map((s) => s.label));
-      final raw = _readLine(prompt).trim();
-      if (raw.isEmpty && defaultTo != null) return defaultTo;
-      try {
-        return ModelStatus.fromInput(raw);
-      } on FormatException catch (e) {
-        _error(e.message);
-      }
+  /// Splits free-form capability text into unique, trimmed labels.
+  Set<String> _parseCapabilities(String raw) {
+    final seen = <String>{};
+    for (final part in raw.split(RegExp(r'[,;\s]+'))) {
+      final trimmed = part.trim();
+      if (trimmed.isNotEmpty) seen.add(trimmed);
     }
-  }
-
-  ModelCapability _readCapability(String prompt) {
-    while (true) {
-      _options('Capabilities', ModelCapability.values.map((c) => c.label));
-      try {
-        return ModelCapability.fromInput(_readLine(prompt));
-      } on FormatException catch (e) {
-        _error(e.message);
-      }
-    }
-  }
-
-  Set<ModelCapability> _readCapabilities(String prompt) {
-    while (true) {
-      _options('Capabilities', ModelCapability.values.map((c) => c.label));
-      try {
-        return ModelCapability.parseSet(_readLine(prompt));
-      } on FormatException catch (e) {
-        _error(e.message);
-      }
-    }
+    return seen;
   }
 
   int _readInt(String prompt, {int? minValue, int defaultTo = -1}) {
@@ -463,10 +435,6 @@ MAIN MENU
   String _readLine(String prompt) {
     stdout.write(prompt);
     return stdin.readLineSync() ?? '';
-  }
-
-  void _options(String header, Iterable<String> options) {
-    print('  $header options: ${options.join(', ')}');
   }
 
   void _info(String message) => print('\x1B[36m$message\x1B[0m');

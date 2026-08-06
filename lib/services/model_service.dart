@@ -1,9 +1,6 @@
 import 'package:uuid/uuid.dart';
 
 import '../models/llm_model.dart';
-import '../models/llm_provider.dart';
-import '../models/model_capability.dart';
-import '../models/model_status.dart';
 
 /// Manages the catalog of LLM models.
 ///
@@ -37,14 +34,14 @@ class ModelService {
   /// Creates and stores a model. Throws [ArgumentError] on invalid values.
   LlmModel createModel({
     required String name,
-    required LlmProvider provider,
+    required String provider,
     required int contextWindow,
     required int maxOutputTokens,
     required double inputCostPerMillion,
     required double outputCostPerMillion,
     String? displayName,
-    Set<ModelCapability> capabilities = const {},
-    ModelStatus status = ModelStatus.available,
+    Set<String> capabilities = const {},
+    String status = 'Available',
     String description = '',
   }) {
     if (name.trim().isEmpty) {
@@ -66,13 +63,13 @@ class ModelService {
       displayName: displayName?.trim().isEmpty ?? true
           ? null
           : displayName!.trim(),
-      provider: provider,
+      provider: provider.trim().isEmpty ? 'Other' : provider.trim(),
       contextWindow: contextWindow,
       maxOutputTokens: maxOutputTokens,
       inputCostPerMillion: inputCostPerMillion,
       outputCostPerMillion: outputCostPerMillion,
       capabilities: Set.unmodifiable(capabilities),
-      status: status,
+      status: status.trim().isEmpty ? 'Available' : status.trim(),
       description: description.trim(),
       createdAt: _clock(),
     );
@@ -122,17 +119,36 @@ class ModelService {
     }).toList();
   }
 
-  /// Models by [provider], newest first.
-  List<LlmModel> byProvider(LlmProvider provider) =>
-      _models.where((m) => m.provider == provider).toList().reversed.toList();
+  /// Models by [provider] (case-insensitive), newest first.
+  List<LlmModel> byProvider(String provider) {
+    final q = provider.toLowerCase();
+    return _models
+        .where((m) => m.provider.toLowerCase() == q)
+        .toList()
+        .reversed
+        .toList();
+  }
 
-  /// Models by [status], newest first.
-  List<LlmModel> byStatus(ModelStatus status) =>
-      _models.where((m) => m.status == status).toList().reversed.toList();
+  /// Models by [status] (case-insensitive), newest first.
+  List<LlmModel> byStatus(String status) {
+    final q = status.toLowerCase();
+    return _models
+        .where((m) => m.status.toLowerCase() == q)
+        .toList()
+        .reversed
+        .toList();
+  }
 
-  /// Models supporting [capability], newest first.
-  List<LlmModel> byCapability(ModelCapability capability) =>
-      _models.where((m) => m.capabilities.contains(capability)).toList().reversed.toList();
+  /// Models supporting [capability] (case-insensitive substring match on the
+  /// free-form labels), newest first.
+  List<LlmModel> byCapability(String capability) {
+    final q = capability.toLowerCase();
+    return _models
+        .where((m) => m.capabilities.any((c) => c.toLowerCase().contains(q)))
+        .toList()
+        .reversed
+        .toList();
+  }
 
   /// All models sorted by estimated cost to process 10,000 tokens, cheapest
   /// first.
@@ -144,13 +160,12 @@ class ModelService {
 
   /// Aggregated numbers used to render the dashboard.
   Map<String, int> statistics() {
-    return {
-      'total': _models.length,
-      for (final provider in LlmProvider.values)
-        provider.name: _models.where((m) => m.provider == provider).length,
-      for (final status in ModelStatus.values)
-        'status_${status.name}': _models.where((m) => m.status == status).length,
-    };
+    final result = <String, int>{'total': _models.length};
+    for (final model in _models) {
+      result['prov_${model.provider}'] = (result['prov_${model.provider}'] ?? 0) + 1;
+      result['status_${model.status}'] = (result['status_${model.status}'] ?? 0) + 1;
+    }
+    return result;
   }
 
   /// Clears the catalog. Used by tests.
